@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(move auth.tsx auth.ts)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

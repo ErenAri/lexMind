@@ -1,0 +1,939 @@
+{
+  "info": {
+    "name": "LexMind API - Comprehensive Test Collection",
+    "description": "Complete API testing suite for LexMind Compliance AI Assistant",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "version": "1.0.0"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{access_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Auto-login if no token exists",
+          "if (!pm.collectionVariables.get('access_token') && pm.request.url.path.join('/') !== 'auth/login') {",
+          "    console.log('No token found, please run auth/login first');",
+          "}"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript", 
+        "exec": [
+          "// Global response validation",
+          "pm.test('Response time is acceptable', () => {",
+          "    pm.expect(pm.response.responseTime).to.be.below(5000);",
+          "});",
+          "",
+          "// Check for rate limit headers",
+          "if (pm.response.headers.has('X-RateLimit-Remaining-Minute')) {",
+          "    pm.test('Rate limit headers present', () => {",
+          "        pm.expect(pm.response.headers.get('X-RateLimit-Limit-Minute')).to.exist;",
+          "        pm.expect(pm.response.headers.get('X-RateLimit-Remaining-Minute')).to.exist;",
+          "    });",
+          "}"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000",
+      "type": "string"
+    },
+    {
+      "key": "access_token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "admin_username",
+      "value": "admin",
+      "type": "string"
+    },
+    {
+      "key": "admin_password", 
+      "value": "admin123",
+      "type": "string"
+    },
+    {
+      "key": "analyst_username",
+      "value": "analyst",
+      "type": "string"
+    },
+    {
+      "key": "analyst_password",
+      "value": "analyst123", 
+      "type": "string"
+    },
+    {
+      "key": "viewer_username",
+      "value": "viewer",
+      "type": "string"
+    },
+    {
+      "key": "viewer_password",
+      "value": "viewer123",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "🔐 Authentication",
+      "item": [
+        {
+          "name": "Login (Admin)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Login successful', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response contains access token', () => {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('access_token');",
+                  "    pm.expect(response).to.have.property('token_type', 'bearer');",
+                  "});",
+                  "",
+                  "// Store token for other requests",
+                  "if (pm.response.code === 200) {",
+                  "    const response = pm.response.json();",
+                  "    pm.collectionVariables.set('access_token', response.access_token);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              }
+            ],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "username",
+                  "value": "{{admin_username}}",
+                  "type": "text"
+                },
+                {
+                  "key": "password",
+                  "value": "{{admin_password}}",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/login",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "login"]
+            }
+          }
+        },
+        {
+          "name": "Login (Analyst)",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              }
+            ],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "username",
+                  "value": "{{analyst_username}}",
+                  "type": "text"
+                },
+                {
+                  "key": "password",
+                  "value": "{{analyst_password}}",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/login",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "login"]
+            }
+          }
+        },
+        {
+          "name": "Get Current User",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('User info retrieved', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    const user = pm.response.json();",
+                  "    pm.expect(user).to.have.property('username');",
+                  "    pm.expect(user).to.have.property('role');",
+                  "    pm.expect(user).to.have.property('is_active', true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/auth/me",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "me"]
+            }
+          }
+        },
+        {
+          "name": "Login Invalid Credentials",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Invalid credentials rejected', () => {",
+                  "    pm.response.to.have.status(401);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              }
+            ],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "username",
+                  "value": "invalid",
+                  "type": "text"
+                },
+                {
+                  "key": "password",
+                  "value": "invalid",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/login",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "login"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "📤 Data Ingestion",
+      "item": [
+        {
+          "name": "Ingest Regulation",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Regulation ingested successfully', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('ok', true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source\": \"GDPR\",\n  \"title\": \"General Data Protection Regulation\",\n  \"section\": \"Article 25\",\n  \"text\": \"The controller shall implement appropriate technical and organisational measures to protect personal data and demonstrate compliance with GDPR.\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/ingest/reg",
+              "host": ["{{base_url}}"],
+              "path": ["ingest", "reg"]
+            }
+          }
+        },
+        {
+          "name": "Ingest Document",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Document ingested successfully', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('ok', true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"path\": \"privacy-policy.md\",\n  \"content\": \"Our company collects personal data including names, email addresses, and usage information. We implement security measures including encryption and access controls to protect this data.\",\n  \"chunk_idx\": 0\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/ingest/doc",
+              "host": ["{{base_url}}"],
+              "path": ["ingest", "doc"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "🔍 Search & Retrieval",
+      "item": [
+        {
+          "name": "Hybrid Search",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Search returns results', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('results');",
+                  "    pm.expect(response).to.have.property('pagination');",
+                  "});",
+                  "",
+                  "pm.test('Pagination info is valid', () => {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response.pagination).to.have.property('total');",
+                  "    pm.expect(response.pagination).to.have.property('limit');",
+                  "    pm.expect(response.pagination).to.have.property('offset');",
+                  "    pm.expect(response.pagination).to.have.property('has_more');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"data protection security measures\",\n  \"top_k\": 10,\n  \"offset\": 0\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/query/hybrid",
+              "host": ["{{base_url}}"],
+              "path": ["query", "hybrid"]
+            }
+          }
+        },
+        {
+          "name": "Search with Pagination",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"compliance\",\n  \"top_k\": 5,\n  \"offset\": 5\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/query/hybrid",
+              "host": ["{{base_url}}"],
+              "path": ["query", "hybrid"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "📄 Document Management",
+      "item": [
+        {
+          "name": "List Documents",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Documents listed successfully', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('documents');",
+                  "    pm.expect(response).to.have.property('pagination');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/documents?limit=10&offset=0",
+              "host": ["{{base_url}}"],
+              "path": ["documents"],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Read Document",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/documents/privacy-policy.md",
+              "host": ["{{base_url}}"],
+              "path": ["documents", "privacy-policy.md"]
+            }
+          }
+        },
+        {
+          "name": "Update Document Metadata",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"path\": \"privacy-policy.md\",\n  \"display_name\": \"Privacy Policy v2.1\",\n  \"description\": \"Updated privacy policy with GDPR compliance details\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/documents/privacy-policy.md",
+              "host": ["{{base_url}}"],
+              "path": ["documents", "privacy-policy.md"]
+            }
+          }
+        },
+        {
+          "name": "Get Recent Documents",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/recent-documents",
+              "host": ["{{base_url}}"],
+              "path": ["recent-documents"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "🤖 AI Analysis",
+      "item": [
+        {
+          "name": "AI Explain",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('AI explanation generated', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('result');",
+                  "    pm.expect(response.result).to.have.property('summary');",
+                  "    pm.expect(response.result).to.have.property('risks');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"regulation_text\": \"The controller shall implement appropriate technical and organisational measures to protect personal data.\",\n  \"document_text\": \"Our company collects personal data including names and email addresses. We use basic password protection.\",\n  \"query\": \"data protection compliance\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/ai/explain",
+              "host": ["{{base_url}}"],
+              "path": ["ai", "explain"]
+            }
+          }
+        },
+        {
+          "name": "AI Fix-It Recommendations",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Fix-it recommendations generated', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('result');",
+                  "    pm.expect(response.result).to.have.property('actions');",
+                  "    pm.expect(response.result).to.have.property('notes');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"regulation_text\": \"Data must be encrypted in transit and at rest with appropriate key management.\",\n  \"document_text\": \"We store customer data in our database with basic security measures.\",\n  \"context\": \"Financial services company handling sensitive customer information\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/ai/fix-it",
+              "host": ["{{base_url}}"],
+              "path": ["ai", "fix-it"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "📊 Coverage & Mappings",
+      "item": [
+        {
+          "name": "Create Mapping",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Mapping created successfully', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('ok', true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reg_id\": 1,\n  \"doc_id\": 1,\n  \"confidence\": 0.85\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/mappings",
+              "host": ["{{base_url}}"],
+              "path": ["mappings"]
+            }
+          }
+        },
+        {
+          "name": "Get Coverage Overview",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Coverage data retrieved', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('items');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/coverage",
+              "host": ["{{base_url}}"],
+              "path": ["coverage"]
+            }
+          }
+        },
+        {
+          "name": "Get Coverage Detail",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/coverage/1",
+              "host": ["{{base_url}}"],
+              "path": ["coverage", "1"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "⚡ Health & System",
+      "item": [
+        {
+          "name": "Basic Health Check",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('API is healthy', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('ok', true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health",
+              "host": ["{{base_url}}"],
+              "path": ["health"]
+            }
+          }
+        },
+        {
+          "name": "Full Health Check",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Full health check passes', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('api', true);",
+                  "    pm.expect(response).to.have.property('db');",
+                  "    pm.expect(response).to.have.property('llm');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health/full",
+              "host": ["{{base_url}}"],
+              "path": ["health", "full"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "🛡️ Security Tests",
+      "item": [
+        {
+          "name": "Test Rate Limiting",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Note: This single request won't trigger rate limiting",
+                  "// You need to run this multiple times quickly to test",
+                  "pm.test('Request has rate limit headers', () => {",
+                  "    pm.expect(pm.response.headers.has('X-RateLimit-Remaining-Minute')).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health",
+              "host": ["{{base_url}}"],
+              "path": ["health"]
+            }
+          }
+        },
+        {
+          "name": "Test Unauthorized Access",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Unauthorized access blocked', () => {",
+                  "    pm.response.to.have.status(401);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/auth/me",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "me"]
+            }
+          }
+        },
+        {
+          "name": "Test Invalid Content-Type",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Invalid content-type rejected', () => {",
+                  "    pm.response.to.have.status(415);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/plain"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "invalid data"
+            },
+            "url": {
+              "raw": "{{base_url}}/ingest/reg",
+              "host": ["{{base_url}}"],
+              "path": ["ingest", "reg"]
+            }
+          }
+        },
+        {
+          "name": "Test Large Payload",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// This should trigger payload too large error if > 10MB",
+                  "pm.test('Large payload handled appropriately', () => {",
+                  "    // Either succeeds or returns 413",
+                  "    pm.expect([200, 413]).to.include(pm.response.code);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source\": \"TEST\",\n  \"title\": \"Large Document Test\",\n  \"section\": \"Test Section\",\n  \"text\": \"{{$randomLoremParagraphs}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/ingest/reg",
+              "host": ["{{base_url}}"],
+              "path": ["ingest", "reg"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "🚀 Load Testing",
+      "item": [
+        {
+          "name": "Concurrent Health Checks",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Health check under load', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.responseTime).to.be.below(1000);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health",
+              "host": ["{{base_url}}"],
+              "path": ["health"]
+            }
+          }
+        },
+        {
+          "name": "Multiple Search Queries",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Search performs under load', () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.responseTime).to.be.below(3000);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"{{$randomWords}}\",\n  \"top_k\": 5,\n  \"offset\": 0\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/query/hybrid",
+              "host": ["{{base_url}}"],
+              "path": ["query", "hybrid"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+version: "3.8"
+services:
+  tidb:
+    image: pingcap/tidb:latest
+    ports:
+      - "4000:4000"
+    environment:
+      - TIDB_STORE=unistore
+      - TIDB_LOG_LEVEL=info

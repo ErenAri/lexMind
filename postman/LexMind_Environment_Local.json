@@ -1,0 +1,54 @@
+{
+  "id": "lexmind-local-env",
+  "name": "LexMind - Local Development",
+  "values": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "admin_username",
+      "value": "admin",
+      "type": "default", 
+      "enabled": true
+    },
+    {
+      "key": "admin_password",
+      "value": "admin123",
+      "type": "secret",
+      "enabled": true
+    },
+    {
+      "key": "analyst_username", 
+      "value": "analyst",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "analyst_password",
+      "value": "analyst123", 
+      "type": "secret",
+      "enabled": true
+    },
+    {
+      "key": "viewer_username",
+      "value": "viewer",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "viewer_password",
+      "value": "viewer123",
+      "type": "secret", 
+      "enabled": true
+    },
+    {
+      "key": "access_token",
+      "value": "",
+      "type": "secret",
+      "enabled": true
+    }
+  ]
+}

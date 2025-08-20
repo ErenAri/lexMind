@@ -1,0 +1,120 @@
+# --- Node.js / Monorepo (pnpm)
+node_modules
+**/node_modules/
+.pnpm-store/
+.npm/
+
+# --- Next.js / Frontend builds
+.next
+**/.next/
+.next/cache
+**/.next/cache
+out
+**/out
+build
+**/build
+dist
+**/dist
+coverage
+**/coverage
+.vercel
+**/.vercel
+.netlify
+**/.netlify
+
+# --- Logs
+logs
+**/logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# --- Python / FastAPI
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Packaging
+*.egg-info/
+**/*.egg-info/
+.eggs/
+**/.eggs/
+build/
+**/build/
+dist/
+**/dist/
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+**/.venv/
+venv/
+**/venv/
+env/
+**/env/
+ENV/
+**/ENV/
+.python-version
+apps/api/venv/
+
+# Test / tooling caches
+.pytest_cache/
+**/.pytest_cache/
+.mypy_cache/
+**/.mypy_cache/
+.ruff_cache/
+**/.ruff_cache/
+.pytype/
+**/.pytype/
+.tox/
+**/.tox/
+.coverage
+coverage.xml
+htmlcov/
+**/htmlcov/
+
+# --- Environments & secrets
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.key
+
+# --- IDE / Editor
+.vscode/
+**/.vscode/
+.idea/
+**/.idea/
+*.iml
+*.swp
+*.swo
+*~
+
+# --- OS files
+.DS_Store
+**/.DS_Store
+Thumbs.db
+**/Thumbs.db
+
+# --- Data / temp
+tmp/
+**/tmp/
+temp/
+**/temp/
+
+# --- Notebooks
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+
+# --- Monorepo build tools
+.turbo/
+**/.turbo/
+.nx/
+**/.nx/

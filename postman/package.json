@@ -1,0 +1,28 @@
+{
+  "name": "lexmind-api-tests",
+  "version": "1.0.0",
+  "description": "Postman/Newman API testing suite for LexMind",
+  "main": "run-tests.js",
+  "scripts": {
+    "test": "node run-tests.js",
+    "test:setup": "newman run test-data-setup.json -e LexMind_Environment_Local.json",
+    "test:main": "newman run LexMind_API_Collection.json -e LexMind_Environment_Local.json",
+    "test:ci": "newman run LexMind_API_Collection.json -e LexMind_Environment_Local.json --reporters json,cli --reporter-json-export ./reports/results.json",
+    "install-newman": "npm install -g newman newman-reporter-html"
+  },
+  "keywords": [
+    "api-testing",
+    "postman",
+    "newman",
+    "lexmind",
+    "compliance"
+  ],
+  "dependencies": {
+    "newman": "^6.0.0"
+  },
+  "devDependencies": {
+    "newman-reporter-html": "^1.0.5"
+  },
+  "author": "LexMind Team",
+  "license": "MIT"
+}
