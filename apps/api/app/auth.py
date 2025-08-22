@@ -32,30 +32,7 @@ class User(BaseModel):
 class UserInDB(User):
     hashed_password: str
 
-# Mock user database - replace with actual database in production
-fake_users_db = {
-    "admin": {
-        "username": "admin",
-        "email": "admin@lexmind.com",
-        "hashed_password": pwd_context.hash("admin123"),
-        "role": "admin",
-        "is_active": True,
-    },
-    "analyst": {
-        "username": "analyst", 
-        "email": "analyst@lexmind.com",
-        "hashed_password": pwd_context.hash("analyst123"),
-        "role": "analyst",
-        "is_active": True,
-    },
-    "viewer": {
-        "username": "viewer",
-        "email": "viewer@lexmind.com", 
-        "hashed_password": pwd_context.hash("viewer123"),
-        "role": "viewer",
-        "is_active": True,
-    }
-}
+# Database-based user management (replaces fake_users_db)
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
@@ -63,19 +40,40 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
 
-def get_user(username: str) -> Optional[UserInDB]:
-    if username in fake_users_db:
-        user_dict = fake_users_db[username]
-        return UserInDB(**user_dict)
-    return None
+def get_user_sync(username: str) -> Optional[UserInDB]:
+    from .sqlite_deps import execute
+    sql = "SELECT id, username, email, hashed_password, role, is_active FROM users WHERE username = ? AND is_active = 1"
+    rows = execute(sql, [username])
+    if not rows:
+        return None
+    
+    row = rows[0]
+    return UserInDB(
+        username=row["username"],
+        email=row["email"] or "",
+        hashed_password=row["hashed_password"],
+        role=row["role"],
+        is_active=bool(row["is_active"])
+    )
 
-def authenticate_user(username: str, password: str) -> Optional[UserInDB]:
-    user = get_user(username)
+async def get_user(username: str) -> Optional[UserInDB]:
+    return get_user_sync(username)
+
+def authenticate_user_sync(username: str, password: str) -> Optional[UserInDB]:
+    user = get_user_sync(username)
     if not user:
         return None
     if not verify_password(password, user.hashed_password):
         return None
+    
+    # Update last_login timestamp
+    from .sqlite_deps import execute
+    execute("UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE username = ?", [username])
+    
     return user
+
+async def authenticate_user(username: str, password: str) -> Optional[UserInDB]:
+    return authenticate_user_sync(username, password)
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
@@ -103,7 +101,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     except JWTError:
         raise credentials_exception
     
-    user = get_user(username=username)
+    user = await get_user(username=username)
     if user is None:
         raise credentials_exception
     return User(username=user.username, email=user.email, role=user.role, is_active=user.is_active)

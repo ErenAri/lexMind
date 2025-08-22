@@ -3,8 +3,8 @@ import useSWR from "swr";
 import { motion } from "framer-motion";
 import { Shield } from "lucide-react";
 
-const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
-import { fetchJson } from "@/lib/api";
+import { fetchJson, getBaseApiUrl } from "@/lib/api";
+const apiBase = getBaseApiUrl();
 const fetcher = async (url: string) => {
   const res = await fetchJson(url);
   const data = await res.json();
@@ -15,7 +15,7 @@ const fetcher = async (url: string) => {
 };
 
 export default function CoveragePanel({ onSelectReg }: { onSelectReg?: (reg: any) => void }) {
-  const { data, error, isLoading } = useSWR(apiUrl + "/coverage", fetcher, { refreshInterval: 20000 });
+  const { data, error, isLoading } = useSWR(apiBase + "/coverage", fetcher, { refreshInterval: 20000 });
   const items = (data?.items || []) as Array<{ reg_id: number; section: string; evidence_count: number }>;
 
   return (
@@ -46,7 +46,7 @@ export default function CoveragePanel({ onSelectReg }: { onSelectReg?: (reg: any
 }
 
 function CoverageRow({ idx, regId, section, count, onSelectReg }: { idx: number; regId: number; section: string; count: number; onSelectReg?: (reg:any)=>void }) {
-  const { data, error } = useSWR(apiUrl + "/coverage/" + regId, fetcher);
+  const { data, error } = useSWR(apiBase + "/coverage/" + regId, fetcher);
   const detail = data?.items || [];
   const reg = data?.reg;
   return (

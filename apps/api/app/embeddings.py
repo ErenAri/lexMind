@@ -72,3 +72,8 @@ def generate_embedding(text: str, dim: int = 384) -> List[float]:
     base = (seed % 1000) / 1000.0
     stub = [base for _ in range(dim)]
     return _l2_normalize(stub)
+
+
+def is_model_available() -> bool:
+    """Return True if a sentence-transformers model could be loaded."""
+    return _load_model() is not None

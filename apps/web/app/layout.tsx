@@ -1,23 +1,21 @@
 import "./globals.css";
 import { ReactNode } from "react";
-import SplashScreen from "../components/SplashScreen";
-import AuthWrapper from "../components/AuthWrapper";
+import { Providers } from "./providers";
 
 export const metadata = { 
   title: "LexMind - Compliance AI Assistant", 
-  description: "Professional compliance management with AI-powered insights" 
+  description: "Professional compliance management with AI-powered insights",
+  icons: {
+    // Inline data URI to avoid favicon 404 during dev without adding binary assets
+    icon: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='12' fill='%231E40AF'/><text x='50%' y='56%' dominant-baseline='middle' text-anchor='middle' font-family='Arial' font-size='34' fill='white'>L</text></svg>",
+  }
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" className="h-full">
-      <body className="h-full">
-        <SplashScreen />
-        <AuthWrapper>
-          <div className="container-page">
-            {children}
-          </div>
-        </AuthWrapper>
+    <html lang="en" className="h-full" suppressHydrationWarning>
+      <body className="h-full" suppressHydrationWarning>
+        <Providers>{children}</Providers>
       </body>
     </html>
   );

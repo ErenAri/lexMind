@@ -3,8 +3,8 @@ import useSWR from "swr";
 import { motion } from "framer-motion";
 import { ArrowRight, AlertTriangle, FileText, Shield, Link as LinkIcon } from "lucide-react";
 
-const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
-import { fetchJson } from "@/lib/api";
+import { fetchJson, getBaseApiUrl } from "@/lib/api";
+const apiUrl = getBaseApiUrl();
 const postFetcher = async (url: string, body: string) => {
   const res = await fetchJson(url, { method: "POST", body });
   const data = await res.json();

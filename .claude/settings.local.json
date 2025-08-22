@@ -1,9 +1,32 @@
 {
   "permissions": {
     "allow": [
-      "Bash(move auth.tsx auth.ts)"
+      "Bash(move auth.tsx auth.ts)",
+      "Bash(python:*)",
+      "Bash(docker-compose up:*)",
+      "Bash(pnpm dev:*)",
+      "Bash(. venv/Scripts/activate)",
+      "Bash(uvicorn:*)",
+      "Bash(curl:*)",
+      "Bash(pnpm list:*)",
+      "Bash(cp:*)",
+      "Bash(mv:*)",
+      "Bash(rm:*)",
+      "Bash(pip install:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm run lint)",
+      "Bash(npm run dev:*)",
+      "Bash(.venvScriptsactivate)",
+      "Bash(cat:*)",
+      "Bash(find:*)",
+      "Bash(powershell:*)",
+      "Bash(taskkill:*)"
     ],
     "deny": [],
-    "ask": []
+    "ask": [],
+    "additionalDirectories": [
+      "C:\\c\\projects\\lexmind\\apps",
+      "C:\\c\\projects"
+    ]
   }
 }

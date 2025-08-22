@@ -109,6 +109,13 @@ tmp/
 temp/
 **/temp/
 
+# --- SQLite Database Files
+*.db
+*.sqlite
+*.sqlite3
+lexmind.db
+apps/api/lexmind.db
+
 # --- Notebooks
 .ipynb_checkpoints/
 **/.ipynb_checkpoints/

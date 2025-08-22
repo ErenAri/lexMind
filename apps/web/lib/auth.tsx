@@ -45,7 +45,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const fetchCurrentUser = async (authToken: string) => {
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/auth/me`, {
+      const base = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000').replace(/\/$/, '') + '/api/v1';
+      const response = await fetch(`${base}/auth/me`, {
         headers: {
           'Authorization': `Bearer ${authToken}`,
         },
@@ -70,18 +71,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (username: string, password: string): Promise<boolean> => {
     try {
-      const formData = new FormData();
-      formData.append('username', username);
-      formData.append('password', password);
+      const apiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000').replace(/\/$/, '') + '/api/v1';
+      console.log('🔐 Login attempt:', { username, apiUrl });
+      
+      const formData = new URLSearchParams();
+      formData.set('username', username);
+      formData.set('password', password);
 
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/auth/login`, {
+      const response = await fetch(`${apiUrl}/auth/login`, {
         method: 'POST',
-        body: formData,
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: formData.toString(),
       });
+
+      console.log('🔐 Login response status:', response.status);
 
       if (response.ok) {
         const data = await response.json();
         const newToken = data.access_token;
+        console.log('🔐 Login successful, got token');
         
         setToken(newToken);
         localStorage.setItem('auth_token', newToken);
@@ -90,10 +101,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         await fetchCurrentUser(newToken);
         return true;
       } else {
+        const errorData = await response.text();
+        console.error('🔐 Login failed:', response.status, errorData);
         return false;
       }
     } catch (error) {
-      console.error('Login failed:', error);
+      console.error('🔐 Login error:', error);
       return false;
     }
   };

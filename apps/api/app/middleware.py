@@ -1,5 +1,6 @@
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
+import os
 from starlette.responses import JSONResponse
 import uuid
 import time
@@ -64,13 +65,28 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
-            "style-src 'self' 'unsafe-inline'; "
-            "img-src 'self' data: https:; "
-            "connect-src 'self' ws: wss:;"
-        )
+        env = os.getenv("ENVIRONMENT", "development")
+        if env == "development":
+            csp = (
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data: https:; "
+                "connect-src 'self' http://localhost:3000 http://localhost:3001 ws: wss:;"
+            )
+        else:
+            frontend = os.getenv("FRONTEND_URL", "").strip()
+            connect_src = ["'self'", "ws:", "wss:"]
+            if frontend:
+                connect_src.append(frontend)
+            csp = (
+                "default-src 'self'; "
+                "script-src 'self'; "
+                "style-src 'self'; "
+                "img-src 'self' data: https:; "
+                f"connect-src {' '.join(connect_src)};"
+            )
+        response.headers["Content-Security-Policy"] = csp
         
         return response
 
@@ -99,7 +115,7 @@ class ValidationMiddleware(BaseHTTPMiddleware):
         # Content type guard for JSON endpoints (exclude file upload)
         if request.method in {"POST", "PUT", "PATCH"}:
             # Skip validation for specific upload endpoints
-            upload_paths = ["/ingest/pdf", "/auth/login"]
+            upload_paths = ["/ingest/pdf", "/auth/login", "/api/v1/auth/login"]
             if not any(path in request.url.path for path in upload_paths):
                 ct = request.headers.get("content-type", "")
                 if "application/json" not in ct and "application/x-www-form-urlencoded" not in ct:

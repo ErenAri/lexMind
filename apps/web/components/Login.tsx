@@ -15,7 +15,7 @@ export default function Login() {
     setIsLoading(true);
     setError('');
 
-    const success = await login(username, password);
+    const success = await login(username.trim(), password.trim());
     if (!success) {
       setError('Invalid username or password');
     }

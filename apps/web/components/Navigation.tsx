@@ -3,6 +3,8 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/lib/auth';
+import { useRouter } from 'next/navigation';
+import NotificationCenter from './NotificationCenter';
 import { 
   Shield, 
   Search, 
@@ -15,19 +17,31 @@ import {
   X,
   ChevronDown,
   Bell,
-  HelpCircle
+  HelpCircle,
+  MessageCircle,
+  GitCompare,
+  Download,
+  Zap
 } from 'lucide-react';
 
 export default function Navigation() {
   const { user, logout } = useAuth();
+  const router = useRouter();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
 
+  const currentPath = typeof window !== 'undefined' ? window.location.pathname : '/';
+  
   const navigation = [
-    { name: 'Dashboard', href: '/', icon: BarChart3, current: true },
-    { name: 'Documents', href: '/documents', icon: FileText },
-    { name: 'Search', href: '/search', icon: Search },
-    { name: 'Settings', href: '/settings', icon: Settings },
+    { name: 'Dashboard', href: '/', icon: BarChart3, current: currentPath === '/' },
+    { name: 'Chat', href: '/chat', icon: MessageCircle, current: currentPath === '/chat' },
+    { name: 'Documents', href: '/documents', icon: FileText, current: currentPath === '/documents' },
+    { name: 'Compare', href: '/compare', icon: GitCompare, current: currentPath === '/compare' },
+    { name: 'Workflows', href: '/workflows', icon: Zap, current: currentPath === '/workflows' },
+    { name: 'Reports', href: '/reports', icon: Download, current: currentPath === '/reports' },
+    { name: 'Search', href: '/search', icon: Search, current: currentPath === '/search' },
+    { name: 'Settings', href: '/settings', icon: Settings, current: currentPath === '/settings' },
   ];
 
   if (!user) return null;
@@ -86,15 +100,18 @@ export default function Navigation() {
           {/* Right side items */}
           <div className="flex items-center gap-3">
             {/* Notifications */}
-            <button className="btn btn-ghost btn-sm relative">
+            <button 
+              onClick={() => setShowNotifications(true)}
+              className="btn btn-ghost btn-sm relative"
+            >
               <Bell className="h-4 w-4" />
               <span className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-danger-500"></span>
             </button>
 
             {/* Help */}
-            <button className="btn btn-ghost btn-sm">
+            <Link href="/help" className="btn btn-ghost btn-sm">
               <HelpCircle className="h-4 w-4" />
-            </button>
+            </Link>
 
             {/* User menu */}
             <div className="relative">
@@ -125,12 +142,14 @@ export default function Navigation() {
                   <Link
                     href="/profile"
                     className="block px-4 py-2 text-sm text-secondary-700 hover:bg-secondary-100"
+                    onClick={() => setIsUserMenuOpen(false)}
                   >
                     Profile Settings
                   </Link>
                   <Link
                     href="/preferences"
                     className="block px-4 py-2 text-sm text-secondary-700 hover:bg-secondary-100"
+                    onClick={() => setIsUserMenuOpen(false)}
                   >
                     Preferences
                   </Link>
@@ -205,6 +224,12 @@ export default function Navigation() {
           onClick={() => setIsUserMenuOpen(false)}
         />
       )}
+      
+      {/* Notification Center */}
+      <NotificationCenter 
+        isOpen={showNotifications} 
+        onClose={() => setShowNotifications(false)} 
+      />
     </nav>
   );
 }

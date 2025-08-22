@@ -5,6 +5,12 @@ export function getRole(): 'viewer' | 'analyst' | 'admin' {
   return r === 'analyst' || r === 'admin' ? r : 'viewer';
 }
 
+export function getBaseApiUrl(): string {
+  const raw = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+  // Standardize on versioned API
+  return raw.replace(/\/$/, '') + '/api/v1';
+}
+
 export async function fetchJson(url: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers as any);
   
@@ -13,8 +19,10 @@ export async function fetchJson(url: string, init: RequestInit = {}) {
   if (token) {
     headers.set('Authorization', `Bearer ${token}`);
   } else {
-    // Fallback to legacy x-role header for backward compatibility
-    headers.set('x-role', getRole());
+    // Fallback to legacy x-role header only in development and when explicitly enabled
+    if (process.env.NODE_ENV !== 'production' && (process.env.NEXT_PUBLIC_ENABLE_ROLE_FALLBACK === '1')) {
+      headers.set('x-role', getRole());
+    }
   }
   
   if (!headers.has('Content-Type') && init.method && init.method !== 'GET') {
@@ -35,7 +43,7 @@ export async function fetchJson(url: string, init: RequestInit = {}) {
 
 // New helper for authenticated API calls with token from auth context
 export function createApiClient(token: string | null) {
-  const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+  const baseUrl = getBaseApiUrl();
   
   return {
     async request(endpoint: string, options: RequestInit = {}) {
