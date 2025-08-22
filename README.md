@@ -299,7 +299,7 @@ For support and questions:
 
 ---
 
-**Built with ❤️ for compliance professionals**
+**Built for compliance professionals**
 
 > 🔒 **Privacy First**: All data processing happens locally. No external API calls for document analysis.
 
