@@ -89,12 +89,16 @@ pip install -r requirements.txt
 Create `.env` file in the root directory:
 
 ```env
-# Database (SQLite)
-TIDB_HOST=localhost
-TIDB_PORT=3306
+# Database (choose one)
+# Option A: TiDB Serverless / MySQL-compatible
+TIDB_HOST=127.0.0.1
+TIDB_PORT=4000
 TIDB_USER=root
 TIDB_PASSWORD=
-TIDB_DATABASE=lexmind.db
+TIDB_DATABASE=lexmind
+
+# Option B: SQLite (local dev via app.main_sqlite)
+# No DB env required for SQLite path; migrations will create local file
 
 # Ollama Configuration
 OLLAMA_URL=http://127.0.0.1:11434
@@ -102,6 +106,9 @@ OLLAMA_MODEL=mistral:7b-instruct
 
 # Frontend
 NEXT_PUBLIC_API_URL=http://localhost:8000
+
+# Optional: Slack notifications for agent runs
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/XXXXX/XXXXX/XXXXXXXXXXXXXXXX
 ```
 
 ### 3. Setup Ollama (AI Chat)
@@ -124,13 +131,23 @@ cd apps/api
 python migrate.py
 ```
 
+Note: New migration 015 adds tables/columns for agent runs, dashboard status, and metadata.
+If you run SQL migrations manually, apply `infra/migrations/015_metadata_and_agent.sql` as well.
+
 ### 5. Start Development Servers
 
-**Terminal 1 - Backend:**
+**Terminal 1 - Backend (choose one):**
 ```bash
+# SQLite (simple local)
 cd apps/api
 .\venv\Scripts\activate
 uvicorn app.main_sqlite:app --reload --host 0.0.0.0 --port 8000
+
+# TiDB (Serverless/MySQL-compatible)
+# requires TiDB up (see Docker below) and .env TiDB_* set
+cd apps/api
+.\venv\Scripts\activate
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 **Terminal 2 - Frontend:**
@@ -149,6 +166,20 @@ ollama serve
 - **Frontend**: http://localhost:3000
 - **Backend API**: http://localhost:8000
 - **API Docs**: http://localhost:8000/docs
+ 
+### 7. (Optional) Start TiDB locally via Docker
+
+```bash
+cd infra
+docker-compose up -d
+```
+
+TiDB listens on 4000 by default. Keep `TIDB_PORT=4000` in `.env`.
+
+### 8. Authentication notes
+
+- Ingest endpoints require auth now. For PDF/DOCX uploads, include `Authorization: Bearer <token>`.
+- `POST /ingest/pdf` expects multipart form with fields: `file` and `doc_type` (reg|doc) plus Bearer token.
 
 ## 📖 Usage
 
@@ -165,6 +196,11 @@ ollama serve
 - "What should I do if there's a data breach?"
 - "Explain our privacy policy in simple terms"
 - "What documents do I need for SOX compliance?"
+
+### Agent & Dashboard Demo Flow (2–3 min)
+1. Open `/agent`, run query: "List top compliance risks from our documents", optionally enable Slack notify.
+2. Click "Seed demo data" if needed, then run again; inspect steps and sources.
+3. On Dashboard, click "Analyze all", then "Refresh"; charts should populate.
 
 ## 🔧 Configuration
 
@@ -201,6 +237,18 @@ The system supports multiple Ollama models with automatic fallback:
 - `POST /api/v1/chat` - Send message to AI
 - `GET /api/v1/chat/conversations/{id}/messages` - Get conversation messages
 
+### Agent Orchestrator
+- `POST /api/v1/agent/run` - Run multi-step agent (search → context → AI answer → optional Slack notify)
+- `GET /api/v1/agent/runs` - List recent runs
+- `GET /api/v1/agent/runs/{id}` - Get run by id
+
+### Compliance & Analytics
+- `POST /api/v1/compliance/analyze-all` - Demo: mark all documents analyzed so dashboard shows data
+
+### Ingest (TiDB path)
+- `POST /api/v1/ingest/reg` - Seed a regulation text
+- `POST /api/v1/ingest/doc` - Seed a company document
+
 ### Search & Analysis
 - `POST /query/hybrid` - Hybrid document search
 - `POST /ai/explain` - Get AI explanation of content
@@ -220,6 +268,14 @@ The system supports multiple Ollama models with automatic fallback:
 - Run migrations: `python migrate.py`
 - Verify database path in `.env`
 
+**5. Agent returns 0 sources**
+- If you ingested via SQLite API but are running the TiDB API (`app.main:app`), datasets differ. Either:
+  - Run the SQLite API (`app.main_sqlite:app`) to query the same local data, or
+  - Re-ingest into TiDB using the TiDB ingest endpoints, or click "Seed demo data" on `/agent`.
+
+**6. Dashboard shows zeros**
+- Click "Analyze all" on the Dashboard. This writes demo analysis rows to `document_compliance_status` so charts populate.
+
 **3. Authentication issues**
 - Clear browser localStorage
 - Check if user exists in database
@@ -238,6 +294,15 @@ The system supports multiple Ollama models with automatic fallback:
 - **Model Performance**: Adjust timeout values in `main_sqlite.py` for slower hardware
 
 ## 🔄 Recent Updates
+
+### v1.3.0 - Agentic Workflow & Dashboard Data
+- ✅ Agent runner endpoint `POST /api/v1/agent/run` with persisted history and re-run
+- ✅ Slack notifications via `SLACK_WEBHOOK_URL`
+- ✅ Agent UI at `/agent`: run form, steps view, run history, re-run, seed demo data
+- ✅ Performance widget backed by read-optimized queries
+- ✅ Dashboard "Analyze all" action + backend `POST /api/v1/compliance/analyze-all`
+- ✅ Sticky navbar across pages
+- ✅ Redesigned Upload Documents UI: no modal, drag-and-drop, non-overlapping layout
 
 ### v1.2.0 - Enhanced AI Chat System
 - ✅ **Fast AI Responses**: Implemented optimized chat system with 15-20s response times

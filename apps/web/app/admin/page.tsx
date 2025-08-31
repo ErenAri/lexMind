@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import AuthWrapper from '@/components/AuthWrapper';
 import DashboardLayout from '@/components/DashboardLayout';
-import { RoleGuard } from '@/components/RoleGuard';
+import RoleGuard from '@/components/RoleGuard';
 import { useAuth } from '@/lib/auth';
 import { 
   Users,

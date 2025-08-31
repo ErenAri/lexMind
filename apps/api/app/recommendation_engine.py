@@ -871,8 +871,8 @@ class RecommendationEngine:
                 hour_counts[created_at.hour] += 1
         
         return {
-            'most_active_weekday': max(weekday_counts, key=weekday_counts.get) if weekday_counts else None,
-            'most_active_hour': max(hour_counts, key=hour_counts.get) if hour_counts else None,
+            'most_active_weekday': (max(weekday_counts.items(), key=lambda kv: kv[1])[0] if weekday_counts else None),
+            'most_active_hour': (max(hour_counts.items(), key=lambda kv: kv[1])[0] if hour_counts else None),
             'weekday_distribution': dict(weekday_counts),
             'hour_distribution': dict(hour_counts)
         }

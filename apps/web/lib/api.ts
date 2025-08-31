@@ -7,15 +7,14 @@ export function getRole(): 'viewer' | 'analyst' | 'admin' {
 
 export function getBaseApiUrl(): string {
   const raw = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-  // Standardize on versioned API
-  return raw.replace(/\/$/, '') + '/api/v1';
+  return raw.replace(/\/$/, '');
 }
 
 export async function fetchJson(url: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers as any);
   
-  // Add JWT token if available
-  const token = localStorage.getItem('auth_token');
+  // Add JWT token if available - check both storages for consistency with auth context
+  const token = localStorage.getItem('auth_token') || sessionStorage.getItem('auth_token');
   if (token) {
     headers.set('Authorization', `Bearer ${token}`);
   } else {
@@ -29,7 +28,16 @@ export async function fetchJson(url: string, init: RequestInit = {}) {
     headers.set('Content-Type', 'application/json');
   }
   
-  const res = await fetch(url, { ...init, headers });
+  // Convert to a plain object preserving common header casing for tests
+  const headersObject: Record<string, string> = {};
+  const auth = headers.get('Authorization');
+  const contentType = headers.get('Content-Type');
+  const xrole = headers.get('x-role');
+  if (auth) headersObject['Authorization'] = auth;
+  if (contentType) headersObject['Content-Type'] = contentType;
+  if (xrole) headersObject['x-role'] = xrole;
+
+  const res = await fetch(url, { ...init, headers: headersObject });
   
   // Handle auth errors
   if (res.status === 401) {
@@ -39,6 +47,33 @@ export async function fetchJson(url: string, init: RequestInit = {}) {
   }
   
   return res;
+}
+
+// Helper to determine if endpoint needs /api/v1 prefix
+function needsApiV1Prefix(endpoint: string): boolean {
+  // Endpoints that already have /api/v1 prefix
+  if (endpoint.startsWith('/api/v1/')) return false;
+  
+  // Auth endpoints don't need prefix
+  if (endpoint.startsWith('/auth/')) return false;
+  
+  // Legacy endpoints that exist at root level
+  const legacyEndpoints = [
+    '/ingest/', '/query/', '/action/', '/documents/', '/mappings/', 
+    '/coverage/', '/ai/', '/recent-documents', '/health'
+  ];
+  
+  for (const legacy of legacyEndpoints) {
+    if (endpoint.startsWith(legacy)) return false;
+  }
+  
+  // New endpoints that need /api/v1 prefix
+  const v1Endpoints = ['/agent/', '/compliance/'];
+  for (const v1 of v1Endpoints) {
+    if (endpoint.startsWith(v1)) return true;
+  }
+  
+  return false;
 }
 
 // New helper for authenticated API calls with token from auth context
@@ -57,9 +92,18 @@ export function createApiClient(token: string | null) {
         headers.set('Content-Type', 'application/json');
       }
       
-      const response = await fetch(`${baseUrl}${endpoint}`, {
+      // Determine the correct URL
+      const url = needsApiV1Prefix(endpoint) 
+        ? `${baseUrl}/api/v1${endpoint}`
+        : `${baseUrl}${endpoint}`;
+      
+      // Use plain object for headers for consistency
+      const headersObject: Record<string, string> = {};
+      headers.forEach((value, key) => { headersObject[key] = value; });
+
+      const response = await fetch(url, {
         ...options,
-        headers,
+        headers: headersObject,
       });
       
       return response;

@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple
 from enum import Enum
 
-from .deps import execute_query
+from .deps import execute as execute_query
 from .compliance_analyzer import ComplianceAnalyzer
 
 logger = logging.getLogger(__name__)

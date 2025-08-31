@@ -3,7 +3,7 @@
     "name": "LexMind API - Comprehensive Test Collection",
     "description": "Complete API testing suite for LexMind Compliance AI Assistant",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-    "version": "1.0.0"
+    "version": "1.0.1"
   },
   "auth": {
     "type": "bearer",
@@ -21,9 +21,27 @@
       "script": {
         "type": "text/javascript",
         "exec": [
-          "// Auto-login if no token exists",
+          "// Auto-login if no token exists (analyst)",
           "if (!pm.collectionVariables.get('access_token') && pm.request.url.path.join('/') !== 'auth/login') {",
-          "    console.log('No token found, please run auth/login first');",
+          "  pm.sendRequest({",
+          "    url: pm.collectionVariables.get('base_url') + '/auth/login',",
+          "    method: 'POST',",
+          "    header: { 'Content-Type': 'application/x-www-form-urlencoded' },",
+          "    body: { mode: 'urlencoded', urlencoded: [",
+          "      { key: 'username', value: pm.collectionVariables.get('analyst_username') || 'analyst' },",
+          "      { key: 'password', value: pm.collectionVariables.get('analyst_password') || 'analyst123' }",
+          "    ] }",
+          "  }, function (err, res) {",
+          "    if (!err && res && res.code === 200) {",
+          "      try {",
+          "        const data = res.json();",
+          "        if (data && data.access_token) {",
+          "          pm.collectionVariables.set('access_token', data.access_token);",
+          "          console.log('Auto-login successful');",
+          "        }",
+          "      } catch(e) { /* ignore */ }",
+          "    }",
+          "  });",
           "}"
         ]
       }
@@ -31,7 +49,7 @@
     {
       "listen": "test",
       "script": {
-        "type": "text/javascript", 
+        "type": "text/javascript",
         "exec": [
           "// Global response validation",
           "pm.test('Response time is acceptable', () => {",
@@ -66,7 +84,7 @@
       "type": "string"
     },
     {
-      "key": "admin_password", 
+      "key": "admin_password",
       "value": "admin123",
       "type": "string"
     },
@@ -77,7 +95,7 @@
     },
     {
       "key": "analyst_password",
-      "value": "analyst123", 
+      "value": "analyst123",
       "type": "string"
     },
     {
@@ -930,6 +948,129 @@
               "raw": "{{base_url}}/query/hybrid",
               "host": ["{{base_url}}"],
               "path": ["query", "hybrid"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "🤖 Agent",
+      "item": [
+        {
+          "name": "Run Agent",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"List top compliance risks from our documents\",\n  \"notify\": false\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/agent/run",
+              "host": ["{{base_url}}"],
+              "path": ["api","v1","agent","run"]
+            }
+          }
+        },
+        {
+          "name": "List Runs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/agent/runs?limit=20",
+              "host": ["{{base_url}}"],
+              "path": ["api","v1","agent","runs"],
+              "query": [{"key":"limit","value":"20"}]
+            }
+          }
+        },
+        {
+          "name": "Get Run Detail",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/agent/runs/1",
+              "host": ["{{base_url}}"],
+              "path": ["api","v1","agent","runs","1"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "📊 Dashboard",
+      "item": [
+        {
+          "name": "Analyze All (Demo)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/compliance/analyze-all",
+              "host": ["{{base_url}}"],
+              "path": ["api","v1","compliance","analyze-all"]
+            }
+          }
+        },
+        {
+          "name": "Dashboard Summary",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/compliance/dashboard",
+              "host": ["{{base_url}}"],
+              "path": ["api","v1","compliance","dashboard"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "📥 File Upload",
+      "item": [
+        {
+          "name": "Ingest PDF",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "file", "type": "file", "src": [] },
+                { "key": "doc_type", "type": "text", "value": "doc" }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/ingest/pdf",
+              "host": ["{{base_url}}"],
+              "path": ["ingest","pdf"]
+            }
+          }
+        },
+        {
+          "name": "Ingest DOCX",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "file", "type": "file", "src": [] },
+                { "key": "doc_type", "type": "text", "value": "doc" },
+                { "key": "display_name", "type": "text", "value": "Sample DOCX" },
+                { "key": "section", "type": "text", "value": "Policy" },
+                { "key": "tags", "type": "text", "value": "privacy,security" }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/ingest/docx",
+              "host": ["{{base_url}}"],
+              "path": ["ingest","docx"]
             }
           }
         }

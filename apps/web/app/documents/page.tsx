@@ -1,227 +1,256 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import React, { useState } from 'react';
 import DashboardLayout from "@/components/DashboardLayout";
-import SearchBar from "@/components/ui/SearchBar";
 import RoleGuard from "@/components/RoleGuard";
 import EnhancedDocumentUpload from "@/components/EnhancedDocumentUpload";
+import DocumentLibrary from "@/components/documents/DocumentLibrary";
 import { 
-  FileText, 
   Download, 
-  Eye, 
-  Edit, 
-  MoreHorizontal,
-  Calendar
+  Plus,
+  Clock,
+  Star,
+  BarChart3,
+  Folder,
+  Search
 } from "lucide-react";
-import { useAuth } from '@/lib/auth';
-import { createApiClient } from '@/lib/api';
-
-type ApiDocumentItem = {
-  path: string;
-  display_name: string;
-  description: string | null;
-  resolved: boolean;
-  first_seen: string | null;
-  last_seen: string | null;
-  chunks: number;
-  type: 'doc' | 'reg';
-};
 
 export default function DocumentsPage() {
-  const { token } = useAuth();
-  const api = useMemo(() => createApiClient(token), [token]);
-  const [documents, setDocuments] = useState<ApiDocumentItem[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
+  const [activeTab, setActiveTab] = useState<'all' | 'recent' | 'favorites' | 'analytics'>('all');
+  const [selectedDocument, setSelectedDocument] = useState<any>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      setIsLoading(true);
-      try {
-        const res = await api.request('/documents');
-        if (!res.ok) throw new Error(`Failed: ${res.status}`);
-        const json = await res.json();
-        if (!cancelled) setDocuments(json.documents || []);
-      } catch (e) {
-        console.error('Failed to load documents', e);
-      } finally {
-        if (!cancelled) setIsLoading(false);
-      }
-    }
-    load();
-    return () => { cancelled = true; };
-  }, [api]);
-
-  const filtered = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    return (documents || []).filter(d => {
-      if (!q) return true;
-      return (
-        d.display_name.toLowerCase().includes(q) ||
-        (d.description || '').toLowerCase().includes(q) ||
-        d.path.toLowerCase().includes(q)
-      );
-    });
-  }, [documents, searchQuery]);
-
-  const getTypeIcon = (type: string) => {
-    switch (type) {
-      case 'reg': return '📋';
-      case 'doc': return '📄';
-      default: return '📄';
-    }
+  const handleDocumentSelect = (doc: any) => {
+    setSelectedDocument(doc);
+    // Document viewer will be handled by DocumentLibrary component itself
+    console.log('Selected document:', doc);
   };
 
   const handleUploadComplete = () => {
-    // Could refetch here
+    // Refresh the document library without full page reload
+    setActiveTab('all'); // Reset to default view
+    // Force re-render by updating a key
+    window.dispatchEvent(new CustomEvent('documentLibraryRefresh'));
   };
+
+  const tabs = [
+    { key: 'all', label: 'All Documents', icon: Folder, count: null },
+    { key: 'recent', label: 'Recent', icon: Clock, count: null },
+    { key: 'favorites', label: 'Favorites', icon: Star, count: null },
+    { key: 'analytics', label: 'Analytics', icon: BarChart3, count: null }
+  ];
 
   return (
     <DashboardLayout
-      title="Document Management"
-      subtitle="Manage compliance documents, policies, and regulations"
+      title="Document Library"
+      subtitle="Comprehensive document management with search, organization, and analytics"
       actions={
         <div className="flex items-center gap-3">
           <RoleGuard allowed={['analyst', 'admin']}>
             <EnhancedDocumentUpload onUploadComplete={handleUploadComplete} />
           </RoleGuard>
-          <button className="btn btn-secondary btn-md">
+          <button className="flex items-center space-x-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors">
             <Download className="h-4 w-4" />
-            Export List
+            <span>Export</span>
           </button>
         </div>
       }
     >
-      <div className="card p-6 mb-6">
-        <div className="flex flex-col lg:flex-row gap-4">
-          <div className="flex-1">
-            <SearchBar
-              placeholder="Search documents..."
-              onSearch={setSearchQuery}
-              showFilters={false}
+      {/* Document Library Tabs */}
+      <div className="bg-white border-b border-gray-200 mb-6">
+        <nav className="flex space-x-8 px-6">
+          {tabs.map((tab) => (
+            <button
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key as any)}
+              className={`flex items-center space-x-2 py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                activeTab === tab.key
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              <tab.icon className="h-4 w-4" />
+              <span>{tab.label}</span>
+              {tab.count && (
+                <span className="bg-gray-100 text-gray-600 py-1 px-2 rounded-full text-xs">
+                  {tab.count}
+                </span>
+              )}
+            </button>
+          ))}
+        </nav>
+      </div>
+
+      {/* Document Library Content */}
+      <div className="space-y-6">
+        {activeTab === 'all' && (
+          <DocumentLibrary
+            mode="full"
+            onDocumentSelect={handleDocumentSelect}
+          />
+        )}
+
+        {activeTab === 'recent' && (
+          <div className="space-y-6">
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <div className="flex items-center space-x-2">
+                <Clock className="h-5 w-5 text-blue-600" />
+                <h3 className="font-medium text-blue-900">Recently Accessed Documents</h3>
+              </div>
+              <p className="text-sm text-blue-700 mt-1">
+                Documents you've viewed or modified in the past 30 days, sorted by most recent activity.
+              </p>
+            </div>
+            
+            <DocumentLibrary
+              mode="recent"
+              limit={50}
+              onDocumentSelect={handleDocumentSelect}
             />
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setViewMode('list')}
-              className={`btn btn-sm ${viewMode === 'list' ? 'btn-primary' : 'btn-ghost'}`}
-            >
-              List
-            </button>
-            <button
-              onClick={() => setViewMode('grid')}
-              className={`btn btn-sm ${viewMode === 'grid' ? 'btn-primary' : 'btn-ghost'}`}
-            >
-              Grid
-            </button>
+        )}
+
+        {activeTab === 'favorites' && (
+          <div className="space-y-6">
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+              <div className="flex items-center space-x-2">
+                <Star className="h-5 w-5 text-yellow-600" />
+                <h3 className="font-medium text-yellow-900">Your Favorite Documents</h3>
+              </div>
+              <p className="text-sm text-yellow-700 mt-1">
+                Documents you've marked as favorites for quick access. Click the star icon on any document to add it here.
+              </p>
+            </div>
+            
+            <DocumentLibrary
+              mode="favorites"
+              onDocumentSelect={handleDocumentSelect}
+            />
+          </div>
+        )}
+
+        {activeTab === 'analytics' && (
+          <div className="space-y-6">
+            <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+              <div className="flex items-center space-x-2">
+                <BarChart3 className="h-5 w-5 text-purple-600" />
+                <h3 className="font-medium text-purple-900">Document Analytics</h3>
+              </div>
+              <p className="text-sm text-purple-700 mt-1">
+                Insights into document usage, popular content, and access patterns across your organization.
+              </p>
+            </div>
+            
+            <DocumentAnalytics />
+          </div>
+        )}
+      </div>
+    </DashboardLayout>
+  );
+}
+
+// Document Analytics Component
+function DocumentAnalytics() {
+  const [analyticsData, setAnalyticsData] = useState<any>(null);
+  const [isLoading, setIsLoading] = useState(false);
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      {/* Most Popular Documents */}
+      <div className="bg-white p-6 rounded-lg border border-gray-200">
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">Most Popular This Week</h3>
+        <div className="space-y-3">
+          {[
+            { name: "Goldman Sachs Trading Policy", views: 45, users: 12 },
+            { name: "Risk Assessment Guidelines", views: 32, users: 8 },
+            { name: "Compliance Training Manual", views: 28, users: 15 },
+            { name: "SOX Audit Report 2024", views: 21, users: 6 },
+            { name: "Data Privacy Policy", views: 18, users: 9 }
+          ].map((doc, index) => (
+            <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+              <div>
+                <div className="font-medium text-gray-900">{doc.name}</div>
+                <div className="text-sm text-gray-600">{doc.users} unique users</div>
+              </div>
+              <div className="text-right">
+                <div className="font-semibold text-blue-600">{doc.views}</div>
+                <div className="text-xs text-gray-500">views</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Document Categories */}
+      <div className="bg-white p-6 rounded-lg border border-gray-200">
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">Document Distribution</h3>
+        <div className="space-y-3">
+          {[
+            { category: "Policies", count: 156, percentage: 35, color: "bg-blue-500" },
+            { category: "Regulations", count: 89, percentage: 20, color: "bg-green-500" },
+            { category: "Training", count: 67, percentage: 15, color: "bg-yellow-500" },
+            { category: "Audits", count: 45, percentage: 10, color: "bg-purple-500" },
+            { category: "Legal", count: 34, percentage: 8, color: "bg-red-500" },
+            { category: "Other", count: 53, percentage: 12, color: "bg-gray-500" }
+          ].map((item, index) => (
+            <div key={index} className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium text-gray-700">{item.category}</span>
+                <span className="text-sm text-gray-600">{item.count} docs</span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-2">
+                <div
+                  className={`h-2 rounded-full ${item.color}`}
+                  style={{ width: `${item.percentage}%` }}
+                ></div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Access Trends */}
+      <div className="bg-white p-6 rounded-lg border border-gray-200">
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">Access Trends</h3>
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-gray-600">Total Documents</span>
+            <span className="text-2xl font-bold text-gray-900">1,247</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-gray-600">Documents Accessed This Week</span>
+            <span className="text-2xl font-bold text-blue-600">384</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-gray-600">Average Daily Views</span>
+            <span className="text-2xl font-bold text-green-600">127</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-gray-600">Active Users</span>
+            <span className="text-2xl font-bold text-purple-600">43</span>
           </div>
         </div>
       </div>
 
-      {isLoading && (
-        <div className="card p-6">Loading...</div>
-      )}
-
-      {!isLoading && filtered.length === 0 && (
-        <div className="card p-12 text-center">
-          <FileText className="h-12 w-12 text-secondary-400 mx-auto mb-4" />
-          <h3 className="text-lg font-medium text-secondary-900 mb-2">No documents found</h3>
-          <p className="text-secondary-600 mb-4">Upload a document to get started</p>
-          <RoleGuard allowed={['analyst', 'admin']}>
-            <EnhancedDocumentUpload onUploadComplete={handleUploadComplete} />
-          </RoleGuard>
-        </div>
-      )}
-
-      {!isLoading && filtered.length > 0 && (
-        viewMode === 'list' ? (
-          <div className="card">
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-secondary-50 border-b border-secondary-200">
-                  <tr>
-                    <th className="text-left py-3 px-6 text-sm font-medium text-secondary-600">Document</th>
-                    <th className="text-left py-3 px-6 text-sm font-medium text-secondary-600">Type</th>
-                    <th className="text-left py-3 px-6 text-sm font-medium text-secondary-600">First Seen</th>
-                    <th className="text-left py-3 px-6 text-sm font-medium text-secondary-600">Last Seen</th>
-                    <th className="text-left py-3 px-6 text-sm font-medium text-secondary-600">Chunks</th>
-                    <th className="text-left py-3 px-6 text-sm font-medium text-secondary-600">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((doc) => (
-                    <tr key={doc.path} className="border-b border-secondary-100 hover:bg-secondary-50">
-                      <td className="py-4 px-6">
-                        <div className="font-medium text-secondary-900">{doc.display_name}</div>
-                        <div className="text-sm text-secondary-500">{doc.path}</div>
-                      </td>
-                      <td className="py-4 px-6">
-                        <span className="capitalize text-sm text-secondary-700">{doc.type}</span>
-                      </td>
-                      <td className="py-4 px-6">
-                        <div className="flex items-center gap-2">
-                          <Calendar className="h-4 w-4 text-secondary-400" />
-                          <span className="text-sm text-secondary-700">{doc.first_seen || '-'}</span>
-                        </div>
-                      </td>
-                      <td className="py-4 px-6">
-                        <div className="flex items-center gap-2">
-                          <Calendar className="h-4 w-4 text-secondary-400" />
-                          <span className="text-sm text-secondary-700">{doc.last_seen || '-'}</span>
-                        </div>
-                      </td>
-                      <td className="py-4 px-6">{doc.chunks}</td>
-                      <td className="py-4 px-6">
-                        <div className="flex items-center gap-2">
-                          <button className="btn btn-ghost btn-sm">
-                            <Eye className="h-4 w-4" />
-                          </button>
-                          <RoleGuard allowed={['analyst', 'admin']}>
-                            <button className="btn btn-ghost btn-sm">
-                              <Edit className="h-4 w-4" />
-                            </button>
-                          </RoleGuard>
-                          <button className="btn btn-ghost btn-sm">
-                            <MoreHorizontal className="h-4 w-4" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-            {filtered.map((doc) => (
-              <div key={doc.path} className="card p-6 hover:shadow-md transition-shadow">
-                <div className="flex items-start justify-between mb-4">
-                  <span className="text-3xl">{getTypeIcon(doc.type)}</span>
-                </div>
-                <h3 className="font-semibold text-secondary-900 mb-2 line-clamp-2">{doc.display_name}</h3>
-                <div className="text-sm text-secondary-600 mb-3">{doc.path}</div>
-                <div className="flex items-center gap-2">
-                  <button className="btn btn-ghost btn-sm flex-1">
-                    <Eye className="h-4 w-4" />
-                    View
-                  </button>
-                  <RoleGuard allowed={['analyst', 'admin']}>
-                    <button className="btn btn-ghost btn-sm">
-                      <Edit className="h-4 w-4" />
-                    </button>
-                  </RoleGuard>
-                  <button className="btn btn-ghost btn-sm">
-                    <MoreHorizontal className="h-4 w-4" />
-                  </button>
-                </div>
+      {/* Recently Added */}
+      <div className="bg-white p-6 rounded-lg border border-gray-200">
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">Recently Added</h3>
+        <div className="space-y-3">
+          {[
+            { name: "Updated Privacy Policy 2025", date: "2 hours ago", type: "Policy" },
+            { name: "Q1 Risk Assessment Report", date: "1 day ago", type: "Audit" },
+            { name: "New Employee Handbook", date: "2 days ago", type: "Training" },
+            { name: "Basel III Implementation Guide", date: "3 days ago", type: "Regulation" }
+          ].map((doc, index) => (
+            <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+              <div>
+                <div className="font-medium text-gray-900">{doc.name}</div>
+                <div className="text-sm text-gray-600">{doc.type}</div>
               </div>
-            ))}
-          </div>
-        )
-      )}
-    </DashboardLayout>
+              <div className="text-xs text-gray-500">{doc.date}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }

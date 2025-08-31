@@ -520,8 +520,8 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
         </div>
       )}
       
-      {/* Temporarily disabled AnimatePresence
-      <AnimatePresence>
+      {/* Temporarily disabled AnimatePresence */}
+      {/* <AnimatePresence>
         {isOpen && (
           <motion.div
             initial={{ opacity: 0 }}
@@ -849,6 +849,7 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
           </div>
         </div>
       )}
+      </AnimatePresence> */}
     </>
   );
 }

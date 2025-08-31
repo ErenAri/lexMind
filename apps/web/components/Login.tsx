@@ -1,21 +1,30 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/auth';
 import { LogIn, Loader2 } from 'lucide-react';
 
 export default function Login() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const { login } = useAuth();
+
+  // Check if user previously chose to be remembered
+  useEffect(() => {
+    const wasRemembered = localStorage.getItem('remember_me') === 'true';
+    if (wasRemembered) {
+      setRememberMe(true);
+    }
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     setError('');
 
-    const success = await login(username.trim(), password.trim());
+    const success = await login(username.trim(), password.trim(), rememberMe);
     if (!success) {
       setError('Invalid username or password');
     }
@@ -72,6 +81,28 @@ export default function Login() {
             </div>
           </div>
 
+          {/* Remember Me Checkbox */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center">
+              <input
+                id="remember-me"
+                name="remember-me"
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded transition-colors"
+              />
+              <label htmlFor="remember-me" className="ml-2 block text-sm text-gray-700 cursor-pointer select-none">
+                Remember me
+              </label>
+            </div>
+            <div className="text-sm">
+              <a href="#" className="font-medium text-blue-600 hover:text-blue-500">
+                Forgot password?
+              </a>
+            </div>
+          </div>
+
           {error && (
             <div className="rounded-md bg-red-50 p-4">
               <div className="text-sm text-red-700">{error}</div>
@@ -94,6 +125,21 @@ export default function Login() {
               )}
             </button>
           </div>
+
+          {/* Help Text for Remember Me */}
+          {rememberMe && (
+            <div className="rounded-md bg-blue-50 p-3">
+              <div className="text-xs text-blue-700">
+                📝 <strong>Remember Me</strong>: Your login session will persist even after closing the browser. 
+                Only use this on personal devices.
+                {typeof window !== 'undefined' && window.location.protocol === 'http:' && (
+                  <span className="block mt-1 text-yellow-600">
+                    ⚠️ For security, use HTTPS in production.
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
 
           <div className="text-center">
             <div className="text-sm text-gray-600">

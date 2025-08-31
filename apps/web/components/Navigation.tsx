@@ -4,7 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/lib/auth';
 import { useRouter } from 'next/navigation';
-import NotificationCenter from './NotificationCenter';
+import NotificationBell from './notifications/NotificationBell';
 import { 
   Shield, 
   Search, 
@@ -29,7 +29,6 @@ export default function Navigation() {
   const router = useRouter();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
-  const [showNotifications, setShowNotifications] = useState(false);
 
   const currentPath = typeof window !== 'undefined' ? window.location.pathname : '/';
   
@@ -41,13 +40,15 @@ export default function Navigation() {
     { name: 'Workflows', href: '/workflows', icon: Zap, current: currentPath === '/workflows' },
     { name: 'Reports', href: '/reports', icon: Download, current: currentPath === '/reports' },
     { name: 'Search', href: '/search', icon: Search, current: currentPath === '/search' },
+    { name: 'Agent', href: '/agent', icon: Zap, current: currentPath === '/agent' },
     { name: 'Settings', href: '/settings', icon: Settings, current: currentPath === '/settings' },
   ];
 
   if (!user) return null;
 
   return (
-    <nav className="navbar">
+    <>
+    <nav className="fixed top-0 left-0 right-0 z-50 bg-white/95 backdrop-blur-md supports-[backdrop-filter]:bg-white/80 border-b border-gray-200 shadow-sm">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="flex h-16 items-center justify-between">
           {/* Logo and primary nav */}
@@ -60,18 +61,18 @@ export default function Navigation() {
             </Link>
             
             {/* Desktop navigation */}
-            <div className="hidden md:ml-10 md:flex md:space-x-1">
-              {navigation.map((item) => {
+            <div className="hidden lg:ml-8 lg:flex lg:space-x-1">
+              {navigation.slice(0, 8).map((item) => {
                 const Icon = item.icon;
                 return (
                   <Link
                     key={item.name}
                     href={item.href}
                     className={`
-                      inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors
+                      inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200 hover:scale-[1.02]
                       ${item.current 
-                        ? 'bg-primary-100 text-primary-700' 
-                        : 'text-secondary-600 hover:bg-secondary-100 hover:text-secondary-900'
+                        ? 'bg-blue-50 text-blue-700 shadow-sm' 
+                        : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
                       }
                     `}
                   >
@@ -84,15 +85,17 @@ export default function Navigation() {
           </div>
 
           {/* Search bar - hidden on mobile */}
-          <div className="hidden md:block md:flex-1 md:max-w-xs md:ml-8">
+          <div className="hidden lg:block lg:flex-1 lg:max-w-md lg:ml-8">
             <div className="relative">
               <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
-                <Search className="h-4 w-4 text-secondary-400" />
+                <Search className="h-4 w-4 text-gray-400" />
               </div>
               <input
                 type="text"
                 placeholder="Search regulations, documents..."
-                className="input pl-10 w-full text-sm"
+                className="w-full pl-10 pr-4 py-2 text-sm border border-gray-200 rounded-lg bg-white/80 backdrop-blur-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 placeholder:text-gray-400"
+                onFocus={(e) => e.target.placeholder = 'Try: "GDPR compliance" or "trading policy"'}
+                onBlur={(e) => e.target.placeholder = 'Search regulations, documents...'}
               />
             </div>
           </div>
@@ -100,13 +103,7 @@ export default function Navigation() {
           {/* Right side items */}
           <div className="flex items-center gap-3">
             {/* Notifications */}
-            <button 
-              onClick={() => setShowNotifications(true)}
-              className="btn btn-ghost btn-sm relative"
-            >
-              <Bell className="h-4 w-4" />
-              <span className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-danger-500"></span>
-            </button>
+            <NotificationBell />
 
             {/* Help */}
             <Link href="/help" className="btn btn-ghost btn-sm">
@@ -168,7 +165,7 @@ export default function Navigation() {
             {/* Mobile menu button */}
             <button
               onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="md:hidden btn btn-ghost btn-sm"
+              className="lg:hidden inline-flex items-center justify-center p-2 rounded-lg text-gray-600 hover:text-gray-900 hover:bg-gray-50 transition-colors"
             >
               {isMobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
             </button>
@@ -177,7 +174,7 @@ export default function Navigation() {
 
         {/* Mobile menu */}
         {isMobileMenuOpen && (
-          <div className="md:hidden border-t border-secondary-200 pt-4 pb-3 space-y-1">
+          <div className="lg:hidden bg-white border-t border-gray-200 pt-4 pb-3 space-y-1 shadow-lg">
             {/* Mobile search */}
             <div className="px-3 pb-3">
               <div className="relative">
@@ -225,11 +222,10 @@ export default function Navigation() {
         />
       )}
       
-      {/* Notification Center */}
-      <NotificationCenter 
-        isOpen={showNotifications} 
-        onClose={() => setShowNotifications(false)} 
-      />
     </nav>
+    
+    {/* Spacer to prevent content from going under fixed navbar */}
+    <div className="h-16"></div>
+    </>
   );
 }

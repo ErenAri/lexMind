@@ -1,6 +1,7 @@
 import "./globals.css";
 import { ReactNode } from "react";
 import { Providers } from "./providers";
+import Navigation from "@/components/Navigation";
 
 export const metadata = { 
   title: "LexMind - Compliance AI Assistant", 
@@ -15,7 +16,12 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" className="h-full" suppressHydrationWarning>
       <body className="h-full" suppressHydrationWarning>
-        <Providers>{children}</Providers>
+        <Providers>
+          <Navigation />
+          <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-6">
+            {children}
+          </div>
+        </Providers>
       </body>
     </html>
   );

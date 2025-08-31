@@ -11,6 +11,7 @@ import os
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
+REMEMBER_ME_EXPIRE_DAYS = int(os.getenv("REMEMBER_ME_EXPIRE_DAYS", "30"))  # 30 days for remember me
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer()
@@ -75,12 +76,16 @@ def authenticate_user_sync(username: str, password: str) -> Optional[UserInDB]:
 async def authenticate_user(username: str, password: str) -> Optional[UserInDB]:
     return authenticate_user_sync(username, password)
 
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None, remember_me: bool = False):
     to_encode = data.copy()
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
+    elif remember_me:
+        expire = datetime.utcnow() + timedelta(days=REMEMBER_ME_EXPIRE_DAYS)
+        to_encode.update({"remember_me": True})  # Add remember_me flag to token
     else:
-        expire = datetime.utcnow() + timedelta(minutes=15)
+        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt

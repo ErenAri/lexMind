@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { 
   AlertTriangle,
   Home,
@@ -17,6 +18,7 @@ export default function Error({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  const router = useRouter();
   useEffect(() => {
     // Log the error to monitoring service
     console.error('Application error:', error);
@@ -112,7 +114,7 @@ export default function Error({
         {/* Footer */}
         <div className="mt-8 text-center">
           <button
-            onClick={() => window.history.back()}
+            onClick={() => router.back()}
             className="text-sm text-secondary-600 hover:text-secondary-900 flex items-center justify-center gap-1 mx-auto"
           >
             <ArrowLeft className="h-4 w-4" />

@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/auth';
+import { createApiClient } from '@/lib/api';
 import { 
   Search,
   Filter,
@@ -57,7 +58,8 @@ interface SearchResult {
 }
 
 export default function AdvancedSearch() {
-  const { user } = useAuth();
+  const { user, token } = useAuth();
+  const api = React.useMemo(() => createApiClient(token), [token]);
   const [filters, setFilters] = useState<SearchFilters>({
     query: '',
     documentTypes: [],
@@ -108,122 +110,123 @@ export default function AdvancedSearch() {
     'risk-assessment', 'audit', 'training', 'privacy', 'security', 'governance'
   ];
 
-  // Mock search function - replace with actual API call
+  // Real API search function
   const performSearch = async () => {
+    if (!filters.query.trim()) return;
+    
     setIsSearching(true);
     
-    // Simulate API delay
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    // Mock results
-    const mockResults: SearchResult[] = [
-      {
-        id: '1',
-        title: 'GDPR Data Processing Agreement Template',
-        type: 'document',
-        path: '/documents/gdpr-dpa-template.pdf',
-        score: 95,
-        complianceStatus: 'compliant',
-        riskLevel: 'low',
-        framework: 'GDPR',
-        lastAnalyzed: '2024-01-20',
-        highlights: ['data processing', 'lawful basis', 'data subject rights'],
-        tags: ['privacy', 'data-retention', 'governance'],
-        excerpt: 'This data processing agreement template ensures GDPR compliance for third-party data processors...',
-        metadata: {
-          size: '2.3 MB',
-          pages: 15,
-          author: 'Legal Team',
-          version: '2.1'
-        }
-      },
-      {
-        id: '2',
-        title: 'SOX Financial Controls Procedure',
-        type: 'policy',
-        path: '/documents/sox-controls.pdf',
-        score: 88,
-        complianceStatus: 'partially_compliant',
-        riskLevel: 'medium',
-        framework: 'SOX',
-        lastAnalyzed: '2024-01-18',
-        highlights: ['internal controls', 'financial reporting', 'documentation'],
-        tags: ['audit', 'governance', 'risk-assessment'],
-        excerpt: 'Comprehensive procedures for maintaining SOX compliance in financial reporting and internal controls...',
-        metadata: {
-          size: '1.8 MB',
-          pages: 22,
-          author: 'Finance Team',
-          version: '3.0'
-        }
-      },
-      {
-        id: '3',
-        title: 'Incident Response Policy',
-        type: 'policy',
-        path: '/documents/incident-response.pdf',
-        score: 76,
-        complianceStatus: 'non_compliant',
-        riskLevel: 'high',
-        framework: 'ISO27001',
-        lastAnalyzed: '2024-01-15',
-        highlights: ['incident management', 'escalation procedures', 'notification requirements'],
-        tags: ['incident-response', 'security', 'governance'],
-        excerpt: 'Security incident response procedures requiring updates to meet current ISO27001 standards...',
-        metadata: {
-          size: '945 KB',
-          pages: 8,
-          author: 'Security Team',
-          version: '1.5'
-        }
+    try {
+      const response = await api.request('/query/hybrid', {
+        method: 'POST',
+        body: JSON.stringify({ query: filters.query })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Search failed: ${response.status}`);
       }
-    ];
 
-    // Filter results based on current filters
-    let filteredResults = mockResults;
+      const data = await response.json();
+      
+      // Transform API response to our format
+      const transformedResults: SearchResult[] = [
+        ...(data.regs || []).map((reg: any) => ({
+          id: `reg-${reg.id}`,
+          title: reg.title || reg.section || 'Untitled Regulation',
+          type: 'regulation' as const,
+          path: `reg:${reg.id}`,
+          score: Math.round((reg.fts_score || 0) * 100),
+          complianceStatus: 'pending' as const, // Default since API doesn't provide this
+          riskLevel: 'medium' as const, // Default since API doesn't provide this
+          framework: reg.source || 'Unknown',
+          lastAnalyzed: new Date().toISOString().split('T')[0],
+          highlights: data.highlights || [],
+          tags: [], // Could extract from text analysis
+          excerpt: reg.text?.substring(0, 200) + '...' || '',
+          metadata: {
+            size: Math.round(reg.text?.length / 1024 || 0) + ' KB',
+            author: 'Regulatory Authority',
+            version: '1.0'
+          }
+        })),
+        ...(data.docs || []).map((doc: any, index: number) => ({
+          id: `doc-${doc.path}-${index}`,
+          title: doc.path?.split('/').pop() || doc.path || 'Untitled Document',
+          type: 'document' as const,
+          path: doc.path,
+          score: Math.round((doc.sim_score || 0) * 100),
+          complianceStatus: 'pending' as const,
+          riskLevel: 'medium' as const,
+          framework: 'Unknown',
+          lastAnalyzed: new Date().toISOString().split('T')[0],
+          highlights: data.highlights || [],
+          tags: [],
+          excerpt: doc.content?.substring(0, 200) + '...' || '',
+          metadata: {
+            size: Math.round(doc.content?.length / 1024 || 0) + ' KB',
+            author: 'Unknown',
+            version: '1.0'
+          }
+        }))
+      ];
 
-    if (filters.query) {
-      filteredResults = filteredResults.filter(result => 
-        result.title.toLowerCase().includes(filters.query.toLowerCase()) ||
-        result.excerpt.toLowerCase().includes(filters.query.toLowerCase()) ||
-        result.highlights.some(h => h.toLowerCase().includes(filters.query.toLowerCase()))
-      );
-    }
+      // Apply local filters
+      let filteredResults = transformedResults;
 
-    if (filters.complianceStatus.length > 0) {
-      filteredResults = filteredResults.filter(result => 
-        filters.complianceStatus.includes(result.complianceStatus)
-      );
-    }
-
-    if (filters.riskLevels.length > 0) {
-      filteredResults = filteredResults.filter(result => 
-        filters.riskLevels.includes(result.riskLevel)
-      );
-    }
-
-    if (filters.frameworks.length > 0) {
-      filteredResults = filteredResults.filter(result => 
-        filters.frameworks.includes(result.framework)
-      );
-    }
-
-    // Sort results
-    filteredResults.sort((a, b) => {
-      switch (sortBy) {
-        case 'score':
-          return b.score - a.score;
-        case 'date':
-          return new Date(b.lastAnalyzed).getTime() - new Date(a.lastAnalyzed).getTime();
-        case 'title':
-          return a.title.localeCompare(b.title);
-        default:
-          return b.score - a.score; // Default to relevance (score)
+      if (filters.complianceStatus.length > 0) {
+        filteredResults = filteredResults.filter(result => 
+          filters.complianceStatus.includes(result.complianceStatus)
+        );
       }
-    });
 
-    setResults(filteredResults);
-    setIsSearching(false);
+      if (filters.riskLevels.length > 0) {
+        filteredResults = filteredResults.filter(result => 
+          filters.riskLevels.includes(result.riskLevel)
+        );
+      }
+
+      if (filters.frameworks.length > 0) {
+        filteredResults = filteredResults.filter(result => 
+          filters.frameworks.some(f => 
+            result.framework.toLowerCase().includes(f.toLowerCase())
+          )
+        );
+      }
+
+      if (filters.documentTypes.length > 0) {
+        filteredResults = filteredResults.filter(result => 
+          filters.documentTypes.includes(result.type)
+        );
+      }
+
+      // Apply score range filter
+      filteredResults = filteredResults.filter(result => 
+        result.score >= filters.minScore && result.score <= filters.maxScore
+      );
+
+      // Sort results
+      filteredResults.sort((a, b) => {
+        switch (sortBy) {
+          case 'score':
+            return b.score - a.score;
+          case 'date':
+            return new Date(b.lastAnalyzed).getTime() - new Date(a.lastAnalyzed).getTime();
+          case 'title':
+            return a.title.localeCompare(b.title);
+          default:
+            return b.score - a.score; // Default to relevance (score)
+        }
+      });
+
+      setResults(filteredResults);
+      
+    } catch (error) {
+      console.error('Search error:', error);
+      // Fall back to empty results on error
+      setResults([]);
+    } finally {
+      setIsSearching(false);
+    }
   };
 
   const handleFilterChange = (key: keyof SearchFilters, value: any) => {
@@ -273,6 +276,48 @@ export default function AdvancedSearch() {
   const getRiskColor = (risk: string) => {
     const riskObj = riskLevels.find(r => r.id === risk);
     return riskObj?.color || 'bg-secondary-100 text-secondary-800';
+  };
+
+  const viewDocument = async (result: SearchResult) => {
+    try {
+      if (result.type === 'regulation') {
+        // Open regulation in new tab or modal
+        const regId = result.id.replace('reg-', '');
+        window.open(`/documents?reg=${regId}`, '_blank');
+      } else {
+        // Open document in new tab or modal  
+        window.open(`/documents?doc=${encodeURIComponent(result.path)}`, '_blank');
+      }
+    } catch (error) {
+      console.error('Error viewing document:', error);
+    }
+  };
+
+  const downloadDocument = async (result: SearchResult) => {
+    try {
+      const response = await api.request(`/documents/${encodeURIComponent(result.path)}`);
+      
+      if (!response.ok) {
+        throw new Error(`Failed to fetch document: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      const content = data.content || '';
+      
+      // Create download
+      const blob = new Blob([content], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${result.title}.txt`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Error downloading document:', error);
+      alert('Failed to download document. Please try again.');
+    }
   };
 
   useEffect(() => {
@@ -606,11 +651,17 @@ export default function AdvancedSearch() {
                         <span>Last analyzed: {new Date(result.lastAnalyzed).toLocaleDateString()}</span>
                       </div>
                       <div className="flex items-center gap-2">
-                        <button className="btn btn-ghost btn-xs">
+                        <button 
+                          onClick={() => viewDocument(result)}
+                          className="btn btn-ghost btn-xs hover:bg-blue-50 hover:text-blue-700"
+                        >
                           <Eye className="h-3 w-3" />
                           View
                         </button>
-                        <button className="btn btn-ghost btn-xs">
+                        <button 
+                          onClick={() => downloadDocument(result)}
+                          className="btn btn-ghost btn-xs hover:bg-green-50 hover:text-green-700"
+                        >
                           <Download className="h-3 w-3" />
                           Download
                         </button>

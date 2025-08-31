@@ -87,22 +87,22 @@ class AuditLogger:
                        event_type: EventType,
                        action: Action,
                        resource_type: ResourceType,
-                       resource_id: str = None,
-                       resource_path: str = None,
-                       user_id: str = None,
-                       user_role: str = None,
-                       session_id: str = None,
-                       ip_address: str = None,
-                       user_agent: str = None,
-                       request_id: str = None,
-                       before_state: Dict[str, Any] = None,
-                       after_state: Dict[str, Any] = None,
-                       metadata: Dict[str, Any] = None,
-                       compliance_impact: Dict[str, Any] = None,
+                       resource_id: Optional[str] = None,
+                       resource_path: Optional[str] = None,
+                       user_id: Optional[str] = None,
+                       user_role: Optional[str] = None,
+                       session_id: Optional[str] = None,
+                       ip_address: Optional[str] = None,
+                       user_agent: Optional[str] = None,
+                       request_id: Optional[str] = None,
+                       before_state: Optional[Dict[str, Any]] = None,
+                       after_state: Optional[Dict[str, Any]] = None,
+                       metadata: Optional[Dict[str, Any]] = None,
+                       compliance_impact: Optional[Dict[str, Any]] = None,
                        risk_level: RiskLevel = RiskLevel.NONE,
                        success: bool = True,
-                       error_message: str = None,
-                       duration_ms: int = None) -> str:
+                       error_message: Optional[str] = None,
+                       duration_ms: Optional[int] = None) -> Optional[str]:
         """Log an audit event"""
         
         event_id = str(uuid.uuid4())
@@ -169,7 +169,7 @@ class AuditLogger:
             return None
     
     async def log_user_action(self, action: Action, resource_type: ResourceType, 
-                            resource_id: str = None, **kwargs) -> str:
+                            resource_id: Optional[str] = None, **kwargs) -> Optional[str]:
         """Convenience method for logging user actions"""
         return await self.log_event(
             event_type=EventType.USER_ACTION,
@@ -179,8 +179,8 @@ class AuditLogger:
             **kwargs
         )
     
-    async def log_compliance_event(self, action: Action, resource_id: str = None,
-                                 frameworks: List[str] = None, **kwargs) -> str:
+    async def log_compliance_event(self, action: Action, resource_id: Optional[str] = None,
+                                 frameworks: Optional[List[str]] = None, **kwargs) -> Optional[str]:
         """Convenience method for logging compliance events"""
         compliance_impact = {}
         if frameworks:
@@ -196,7 +196,7 @@ class AuditLogger:
             **kwargs
         )
     
-    async def log_workflow_event(self, action: Action, workflow_id: str = None, **kwargs) -> str:
+    async def log_workflow_event(self, action: Action, workflow_id: Optional[str] = None, **kwargs) -> Optional[str]:
         """Convenience method for logging workflow events"""
         return await self.log_event(
             event_type=EventType.WORKFLOW_EVENT,
@@ -207,7 +207,7 @@ class AuditLogger:
         )
     
     async def log_security_event(self, action: Action, risk_level: RiskLevel = RiskLevel.MEDIUM,
-                               **kwargs) -> str:
+                               **kwargs) -> Optional[str]:
         """Convenience method for logging security events"""
         return await self.log_event(
             event_type=EventType.SECURITY_EVENT,
@@ -218,13 +218,13 @@ class AuditLogger:
         )
     
     async def get_audit_trail(self,
-                            event_types: List[EventType] = None,
-                            actions: List[Action] = None,
-                            resource_types: List[ResourceType] = None,
-                            user_id: str = None,
-                            start_date: datetime = None,
-                            end_date: datetime = None,
-                            risk_levels: List[RiskLevel] = None,
+                            event_types: Optional[List[EventType]] = None,
+                            actions: Optional[List[Action]] = None,
+                            resource_types: Optional[List[ResourceType]] = None,
+                            user_id: Optional[str] = None,
+                            start_date: Optional[datetime] = None,
+                            end_date: Optional[datetime] = None,
+                            risk_levels: Optional[List[RiskLevel]] = None,
                             limit: int = 100,
                             offset: int = 0) -> List[Dict[str, Any]]:
         """Get filtered audit trail"""
@@ -304,23 +304,24 @@ class AuditLogger:
                                        generated_by: str,
                                        start_date: datetime,
                                        end_date: datetime,
-                                       filters: Dict[str, Any] = None,
+                                       filters: Optional[Dict[str, Any]] = None,
                                        generated_for: str = 'all') -> str:
         """Generate a compliance report"""
         
         report_id = str(uuid.uuid4())
         
         # Generate report content based on type
+        normalized_filters: Dict[str, Any] = filters or {}
         if report_type == ReportType.AUDIT_SUMMARY:
-            metrics, findings, recommendations = await self._generate_audit_summary(start_date, end_date, filters)
+            metrics, findings, recommendations = await self._generate_audit_summary(start_date, end_date, normalized_filters)
         elif report_type == ReportType.COMPLIANCE_STATUS:
-            metrics, findings, recommendations = await self._generate_compliance_status(start_date, end_date, filters)
+            metrics, findings, recommendations = await self._generate_compliance_status(start_date, end_date, normalized_filters)
         elif report_type == ReportType.RISK_ASSESSMENT:
-            metrics, findings, recommendations = await self._generate_risk_assessment(start_date, end_date, filters)
+            metrics, findings, recommendations = await self._generate_risk_assessment(start_date, end_date, normalized_filters)
         elif report_type == ReportType.USER_ACTIVITY:
-            metrics, findings, recommendations = await self._generate_user_activity(start_date, end_date, filters)
+            metrics, findings, recommendations = await self._generate_user_activity(start_date, end_date, normalized_filters)
         elif report_type == ReportType.SECURITY_EVENTS:
-            metrics, findings, recommendations = await self._generate_security_events(start_date, end_date, filters)
+            metrics, findings, recommendations = await self._generate_security_events(start_date, end_date, normalized_filters)
         else:
             metrics, findings, recommendations = {}, [], []
         

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Body, HTTPException, UploadFile, File, Request, APIRouter, Depends, Query
+from fastapi import FastAPI, Body, HTTPException, UploadFile, File, Request, APIRouter, Depends, Query, Form
 from fastapi.exceptions import RequestValidationError
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.responses import StreamingResponse
@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from datetime import datetime, timedelta
 from .deps import execute
+from .deps_serverless import execute_read_optimized, execute_write_primary
 from .embeddings import generate_embedding as embed
 from .embeddings import is_model_available
 from .compliance_analyzer import compliance_analyzer
@@ -20,6 +21,12 @@ from .auth import (
     require_role, Token, User, ACCESS_TOKEN_EXPIRE_MINUTES, _require_role_legacy,
     get_password_hash
 )
+from .serverless_api import router as serverless_router
+from .document_versioning import router as versioning_router
+from .analytics_engine import router as analytics_router
+from .performance_optimizer import router as performance_router
+from .compliance_graph import router as graph_router
+from .document_library import router as document_library_router
 from .errors import (
     APIError, ValidationError, AuthenticationError, AuthorizationError,
     NotFoundError, ConflictError, DatabaseError, ExternalServiceError,
@@ -36,6 +43,10 @@ try:
     import PyPDF2  # type: ignore
 except Exception:  # keep API import-safe even if optional dep missing
     PyPDF2 = None  # type: ignore
+try:
+    import docx  # type: ignore
+except Exception:
+    docx = None  # type: ignore
 import io
 import json
 
@@ -75,11 +86,15 @@ class RegIn(BaseModel):
     title: str
     section: str
     text: str
+    tags: list[str] | None = None
 
 class DocIn(BaseModel):
     path: str
     content: str
     chunk_idx: int = 0
+    display_name: str | None = None
+    section: str | None = None
+    tags: list[str] | None = None
 
 class HybridIn(BaseModel):
     query: str
@@ -204,6 +219,401 @@ class ComplianceDashboardOut(BaseModel):
 class PaginationIn(BaseModel):
     limit: int = Field(default=50, ge=1, le=500)
     offset: int = Field(default=0, ge=0)
+
+# -----------------------------
+# Agent Orchestrator (TiDB path)
+# -----------------------------
+
+class AgentRunRequest(BaseModel):
+    query: str = Field(..., min_length=3, max_length=500)
+    notify: bool = False
+
+class AgentRunResponse(BaseModel):
+    ok: bool
+    message: str
+    sources_count: int
+    steps: list[dict]
+    notified: bool = False
+    run_id: int | None = None
+
+async def _send_slack_notification(text: str) -> bool:
+    webhook = os.getenv("SLACK_WEBHOOK_URL")
+    if not webhook:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(webhook, json={"text": text})
+        return True
+    except Exception:
+        return False
+
+async def _simple_search_sources(query: str, limit: int = 5) -> list[dict]:
+    """Token-based LIKE search that matches any relevant word (>=3 chars)."""
+    try:
+        import re as _re
+        terms = [t.lower() for t in _re.findall(r"\w+", query) if len(t) >= 3][:5]
+        if not terms:
+            terms = [query.strip()]
+
+        # Build dynamic WHERE (content LIKE %s OR path LIKE %s) for each term, OR-combined
+        doc_clauses = []
+        doc_params: list[str | int] = []
+        for t in terms:
+            like = f"%{t}%"
+            doc_clauses.append("(content LIKE %s OR path LIKE %s)")
+            doc_params.extend([like, like])
+        docs_sql = f"""
+            SELECT path, content FROM corp_docs
+            WHERE {' OR '.join(doc_clauses)}
+            ORDER BY created_at DESC LIMIT %s
+        """
+        doc_params.append(limit)
+        docs = await execute_read_optimized(docs_sql, tuple(doc_params))
+
+        # Regulations
+        reg_clauses = []
+        reg_params: list[str | int] = []
+        for t in terms:
+            like = f"%{t}%"
+            reg_clauses.append("(text LIKE %s OR title LIKE %s OR section LIKE %s)")
+            reg_params.extend([like, like, like])
+        regs_sql = f"""
+            SELECT title, section, text FROM reg_texts
+            WHERE {' OR '.join(reg_clauses)}
+            ORDER BY created_at DESC LIMIT %s
+        """
+        reg_params.append(max(1, limit // 2))
+        regs = await execute_read_optimized(regs_sql, tuple(reg_params))
+
+        sources: list[dict] = []
+        for r in docs or []:
+            sources.append({
+                "type": "document",
+                "title": r.get("path"),
+                "path": r.get("path"),
+                "content": (r.get("content") or "")[:800],
+            })
+        for r in regs or []:
+            sources.append({
+                "type": "regulation",
+                "title": r.get("title"),
+                "path": f"reg:{r.get('title')}",
+                "content": (r.get("text") or "")[:800],
+            })
+        return sources[:limit]
+    except Exception:
+        return []
+
+def _build_context(sources: list[dict]) -> str:
+    if not sources:
+        return "No relevant documents found."
+    parts = ["Context:"]
+    for i, s in enumerate(sources[:3], 1):
+        parts.append(f"{i}. {s.get('title')}: {(s.get('content') or '')[:400]}")
+    return "\n".join(parts)
+
+async def _generate_fast_answer(query: str, sources: list[dict]) -> str | None:
+    ollama = os.getenv("OLLAMA_URL") or "http://127.0.0.1:11434"
+    model = os.getenv("OLLAMA_MODEL") or "mistral:7b-instruct"
+    ctx = _build_context(sources)
+    payload = {
+        "model": model,
+        "prompt": (
+            "You are a concise assistant. Answer the user's question using the context.\n\n"
+            f"Question: {query}\n\n{ctx}\n\nAnswer:"
+        ),
+        "stream": False,
+        "options": {"temperature": 0.2, "num_predict": 160},
+    }
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            r = await client.post(f"{ollama}/api/generate", json=payload)
+            if r.status_code == 200:
+                data = r.json()
+                ans = (data.get("response") or "").strip()
+                return ans or None
+    except Exception:
+        return None
+    return None
+
+def _document_fallback_answer(query: str, sources: list[dict]) -> str:
+    if not sources:
+        return "I couldn't find relevant information."
+    best = sources[0]
+    return f"Based on your documents about '{query}', here's what I found: \n\n{best.get('content','')[:600]}"
+
+@app.post("/api/v1/agent/run", response_model=AgentRunResponse)
+async def run_agent_v1(payload: AgentRunRequest, current_user: User = Depends(get_current_active_user)):
+    steps: list[dict] = []
+    try:
+        steps.append({"step": "received", "query": payload.query, "at": datetime.utcnow().isoformat()})
+        sources = await _simple_search_sources(payload.query)
+        steps.append({"step": "search", "results": len(sources), "at": datetime.utcnow().isoformat()})
+        context = _build_context(sources)
+        steps.append({"step": "context", "chars": len(context), "at": datetime.utcnow().isoformat()})
+        ans = await _generate_fast_answer(payload.query, sources)
+        if not ans:
+            ans = _document_fallback_answer(payload.query, sources)
+        steps.append({"step": "answer", "chars": len(ans), "at": datetime.utcnow().isoformat()})
+        notified = False
+        if payload.notify:
+            notified = await _send_slack_notification(f"Agent run: {payload.query}\n\n{ans[:600]}")
+            steps.append({"step": "notify", "notified": notified, "at": datetime.utcnow().isoformat()})
+        # Persist run (best-effort)
+        run_id: int | None = None
+        try:
+            await _ensure_agent_runs_table()
+            await execute(
+                """
+                INSERT INTO agent_runs(query, answer, sources_count, steps_json, notified, created_at)
+                VALUES(%s, %s, %s, %s, %s, NOW())
+                """,
+                (payload.query, ans, len(sources), json.dumps(steps), notified),
+            )
+            rows = await execute("SELECT LAST_INSERT_ID() AS id", ())
+            if rows and rows[0].get("id") is not None:
+                run_id = int(rows[0]["id"])
+        except Exception:
+            pass
+        return AgentRunResponse(ok=True, message=ans, sources_count=len(sources), steps=steps, notified=notified, run_id=run_id)
+    except Exception as e:
+        steps.append({"step": "error", "error": str(e)})
+        raise HTTPException(status_code=500, detail=f"Agent run failed: {str(e)}")
+
+async def _ensure_agent_runs_table() -> None:
+    try:
+        await execute(
+            """
+            CREATE TABLE IF NOT EXISTS agent_runs (
+              id BIGINT PRIMARY KEY AUTO_INCREMENT,
+              query TEXT,
+              answer MEDIUMTEXT,
+              sources_count INT,
+              steps_json JSON,
+              notified BOOLEAN,
+              created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            (),
+        )
+    except Exception:
+        pass
+
+@app.get("/api/v1/agent/runs")
+async def list_agent_runs(limit: int = 20, offset: int = 0, current_user: User = Depends(get_current_active_user)):
+    await _ensure_agent_runs_table()
+    rows = await execute(
+        """
+        SELECT id, query, sources_count, notified, created_at
+        FROM agent_runs
+        ORDER BY id DESC LIMIT %s OFFSET %s
+        """,
+        (limit, offset),
+    )
+    return {"runs": rows or [], "limit": limit, "offset": offset}
+
+@app.get("/api/v1/agent/runs/{run_id}")
+async def get_agent_run(run_id: int, current_user: User = Depends(get_current_active_user)):
+    await _ensure_agent_runs_table()
+    rows = await execute(
+        """
+        SELECT id, query, answer, sources_count, steps_json, notified, created_at
+        FROM agent_runs WHERE id = %s
+        """,
+        (run_id,),
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Not found")
+    r = rows[0]
+    # Ensure steps is JSON
+    try:
+        raw = r.get("steps_json")
+        r["steps"] = json.loads(raw) if isinstance(raw, (str, bytes, bytearray)) else []
+    except Exception:
+        r["steps"] = []
+    return r
+
+# -----------------------------
+# Analyze all (demo / simplified)
+# -----------------------------
+
+@app.post("/api/v1/compliance/analyze-all")
+async def analyze_all_documents(current_user: User = Depends(get_current_active_user)):
+    """Demo endpoint: mark all documents as analyzed with mock scores.
+    Writes to document_compliance_status to let dashboard reflect data.
+    """
+    try:
+        # Ensure table exists
+        await execute(
+            """
+            CREATE TABLE IF NOT EXISTS document_compliance_status (
+              doc_id BIGINT PRIMARY KEY,
+              overall_score DOUBLE,
+              risk_level VARCHAR(32),
+              compliance_status VARCHAR(64),
+              total_issues INT,
+              critical_issues INT,
+              high_issues INT,
+              medium_issues INT,
+              low_issues INT,
+              metadata JSON,
+              last_analyzed TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            (),
+        )
+
+        # Read docs
+        docs = await execute_read_optimized(
+            "SELECT id, path FROM corp_docs GROUP BY path ORDER BY MAX(created_at) DESC",
+            (),
+        )
+        updated = 0
+        for d in docs or []:
+            doc_id = d.get("id")
+            # simple mock scoring by path name
+            path = (d.get("path") or "").lower()
+            base = 70.0
+            if "risk" in path: base -= 10
+            if "privacy" in path: base += 5
+            score = max(40.0, min(95.0, base))
+            risk = "low" if score >= 80 else ("medium" if score >= 60 else "high")
+            status = "compliant" if score >= 80 else ("partially_compliant" if score >= 60 else "non_compliant")
+            issues = 0 if score >= 85 else (2 if score >= 70 else 5)
+            crit = 0 if score >= 80 else (1 if score < 60 else 0)
+            high = 0 if score >= 80 else (1 if score < 70 else 0)
+            med = 1 if score < 85 else 0
+            low = 1 if score >= 75 else 0
+            await execute(
+                """
+                INSERT INTO document_compliance_status
+                  (doc_id, overall_score, risk_level, compliance_status, total_issues, critical_issues, high_issues, medium_issues, low_issues, metadata, last_analyzed)
+                VALUES
+                  (%s, %s, %s, %s, %s, %s, %s, %s, %s, JSON_OBJECT('categories', JSON_ARRAY('privacy','security')), NOW())
+                ON DUPLICATE KEY UPDATE
+                  overall_score=VALUES(overall_score), risk_level=VALUES(risk_level), compliance_status=VALUES(compliance_status),
+                  total_issues=VALUES(total_issues), critical_issues=VALUES(critical_issues), high_issues=VALUES(high_issues),
+                  medium_issues=VALUES(medium_issues), low_issues=VALUES(low_issues), last_analyzed=NOW()
+                """,
+                (doc_id, score, risk, status, issues, crit, high, med, low),
+            )
+            updated += 1
+        return {"ok": True, "updated": updated}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# -----------------------------
+# Compliance dashboard summary
+# -----------------------------
+
+@app.get("/api/v1/compliance/dashboard")
+async def get_compliance_dashboard_v1(current_user: User = Depends(get_current_active_user)):
+    try:
+        # Totals
+        total_docs_rows = await execute_read_optimized("SELECT COUNT(DISTINCT path) as c FROM corp_docs", ())
+        total_documents = int(total_docs_rows[0].get("c", 0)) if total_docs_rows else 0
+
+        # Analyzed
+        analyzed_rows = await execute_read_optimized("SELECT COUNT(*) as c FROM document_compliance_status", ())
+        analyzed_documents = int(analyzed_rows[0].get("c", 0)) if analyzed_rows else 0
+
+        # Average score
+        avg_rows = await execute_read_optimized("SELECT AVG(overall_score) as avg_score FROM document_compliance_status", ())
+        average_score = float(avg_rows[0].get("avg_score", 0.0) or 0.0) if avg_rows else 0.0
+
+        # Compliance distribution
+        comp_rows = await execute_read_optimized(
+            """
+            SELECT compliance_status, COUNT(*) as c
+            FROM document_compliance_status
+            GROUP BY compliance_status
+            """,
+            (),
+        )
+        compliance_distribution = {r.get("compliance_status") or "unknown": int(r.get("c", 0)) for r in (comp_rows or [])}
+
+        # Risk distribution
+        risk_rows = await execute_read_optimized(
+            """
+            SELECT risk_level, COUNT(*) as c
+            FROM document_compliance_status
+            GROUP BY risk_level
+            """,
+            (),
+        )
+        risk_distribution = {r.get("risk_level") or "unknown": int(r.get("c", 0)) for r in (risk_rows or [])}
+
+        # Recent analyses
+        recent = await execute_read_optimized(
+            """
+            SELECT dcs.doc_id, cd.path, dcs.overall_score, dcs.risk_level, dcs.compliance_status,
+                   dcs.total_issues, dcs.critical_issues, dcs.high_issues, dcs.medium_issues, dcs.low_issues,
+                   dcs.last_analyzed, JSON_EXTRACT(dcs.metadata, '$.categories') AS categories
+            FROM document_compliance_status dcs
+            LEFT JOIN corp_docs cd ON cd.id = dcs.doc_id
+            ORDER BY dcs.last_analyzed DESC
+            LIMIT 20
+            """,
+            (),
+        )
+
+        # Top issues (mock from distribution)
+        top_issues = [
+            {"title": "Data retention gaps", "description": "Retention periods missing.", "risk_level": "high", "category": "privacy", "frequency": (risk_distribution.get("high", 0) or 0)},
+            {"title": "Access control", "description": "Access reviews not documented.", "risk_level": "medium", "category": "security", "frequency": (risk_distribution.get("medium", 0) or 0)},
+        ]
+
+        # Framework coverage (placeholder demo)
+        framework_coverage = [
+            {"name": "GDPR", "full_name": "General Data Protection Regulation", "category": "privacy", "coverage": 72},
+            {"name": "SOX", "full_name": "Sarbanes–Oxley Act", "category": "finance", "coverage": 64},
+        ]
+
+        return {
+            "total_documents": total_documents,
+            "analyzed_documents": analyzed_documents,
+            "average_score": average_score,
+            "compliance_distribution": compliance_distribution,
+            "risk_distribution": risk_distribution,
+            "recent_analyses": recent or [],
+            "top_issues": top_issues,
+            "framework_coverage": framework_coverage,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# -----------------------------
+# Minimal ingest endpoints (TiDB)
+# -----------------------------
+
+@app.post("/api/v1/ingest/reg")
+async def ingest_reg_v1(item: RegIn, current_user: User = Depends(get_current_active_user)):
+    try:
+        await execute(
+            """
+            INSERT INTO reg_texts(source, title, section, text, display_name, tags, created_at)
+            VALUES(%s, %s, %s, %s, %s, %s, NOW())
+            """,
+            (item.source, item.title, item.section, item.text, item.title, ",".join(item.tags) if item.tags else None),
+        )
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/v1/ingest/doc")
+async def ingest_doc_v1(item: DocIn, current_user: User = Depends(get_current_active_user)):
+    try:
+        await execute(
+            """
+            INSERT INTO corp_docs(path, chunk_idx, content, display_name, section, tags, created_at)
+            VALUES(%s, %s, %s, %s, %s, %s, NOW())
+            """,
+            (item.path, item.chunk_idx, item.content, item.display_name, item.section, ",".join(item.tags) if item.tags else None),
+        )
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # Response Schemas
 class Highlight(BaseModel):
@@ -560,10 +970,55 @@ def _split_semantic_chunks(text: str, target: int = 1000, overlap: int = 120) ->
         chunks.append(current)
     return chunks
 
+@app.post("/ingest/docx", response_model=OkOut)
+async def ingest_docx(
+    file: UploadFile = File(...),
+    doc_type: str = Form(...),
+    display_name: str | None = Form(default=None),
+    section: str | None = Form(default=None),
+    tags: str | None = Form(default=None),
+    current_user: User = Depends(get_current_active_user)
+):
+    if not file.filename or not file.filename.lower().endswith('.docx'):
+        raise HTTPException(status_code=400, detail="File must be a DOCX")
+    if docx is None:
+        raise HTTPException(status_code=500, detail="python-docx is not installed on the server")
+    try:
+        raw = await file.read()
+        document = docx.Document(io.BytesIO(raw))
+        text_parts: list[str] = []
+        for para in document.paragraphs:
+            if para.text:
+                text_parts.append(para.text)
+        text_content = "\n".join(text_parts)
+        if not text_content.strip():
+            raise HTTPException(status_code=400, detail="Could not extract text from DOCX")
+        if doc_type == "reg":
+            rvec = embed(text_content)
+            rvec_str = "[" + ",".join(str(x) for x in rvec) + "]"
+            await execute(
+                "INSERT INTO reg_texts(source,title,section,text,display_name,tags,embedding) VALUES(%s,%s,%s,%s,%s,%s,CAST(%s AS VECTOR(384)))",
+                ["uploaded", display_name or file.filename, section or file.filename.replace('.docx',''), text_content, display_name or file.filename, tags, rvec_str]
+            )
+        else:
+            chunks = _split_semantic_chunks(text_content, target=1000, overlap=120)
+            tag_list = (tags or "").split(',') if tags else []
+            for i, chunk in enumerate(chunks):
+                await execute(
+                    "INSERT INTO corp_docs(path, chunk_idx, content, display_name, section, tags) VALUES(%s,%s,%s,%s,%s,%s)",
+                    [file.filename, i, chunk, display_name, section, ",".join([t.strip() for t in tag_list if t.strip()]) or None]
+                )
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/ingest/pdf", response_model=OkOut)
 async def ingest_pdf(
     file: UploadFile = File(...),
-    doc_type: str = Body(..., embed=True)  # "reg" or "doc"
+    doc_type: str = Form(...),  # "reg" or "doc"
+    current_user: User = Depends(get_current_active_user)
 ):
     if not file.filename or not file.filename.lower().endswith('.pdf'):
         raise HTTPException(status_code=400, detail="File must be a PDF")
@@ -1399,9 +1854,10 @@ async def get_document_compliance_status(doc_id: int, current_user: User = Depen
     }
 
 
-@app.get("/compliance/dashboard", response_model=ComplianceDashboardOut)
+@app.get("/compliance/dashboard", include_in_schema=False)
 async def get_compliance_dashboard(current_user: User = Depends(get_current_active_user)):
-    """Get compliance dashboard overview data"""
+    """Deprecated: use /api/v1/compliance/dashboard"""
+    return await get_compliance_dashboard_v1(current_user)
     
     # Total documents
     total_docs_sql = "SELECT COUNT(DISTINCT path) as count FROM corp_docs"
@@ -2863,14 +3319,30 @@ async def v1_health_full():
 
 app.include_router(api_v1)
 
-# Register versioned aliases for existing endpoints (temporary dual-stack)
-# Note: keep in sync with actual route functions above
+# Include TiDB Serverless enhanced endpoints
+app.include_router(serverless_router)
+
+# Include Document Versioning endpoints
+app.include_router(versioning_router)
+
+# Include Advanced Analytics endpoints  
+app.include_router(analytics_router)
+
+# Include Performance Optimization endpoints
+app.include_router(performance_router)
+
+# Include Compliance Graph endpoints
+app.include_router(graph_router)
+
+# Include Enhanced Document Library endpoints
+app.include_router(document_library_router)
+
 def _v1(alias: str, func, methods: list[str]):
     app.add_api_route("/api/v1" + alias, func, methods=methods)
 
-_v1("/ingest/reg", ingest_reg, ["POST"])
-_v1("/ingest/doc", ingest_doc, ["POST"])
-_v1("/ingest/pdf", ingest_pdf, ["POST"])
+_v1("/ingest/reg", ingest_reg, ["POST"])  # legacy alias
+_v1("/ingest/doc", ingest_doc, ["POST"])  # legacy alias
+_v1("/ingest/pdf", ingest_pdf, ["POST"])   # legacy alias
 _v1("/query/hybrid", query_hybrid, ["POST"])
 _v1("/action/task", action_task, ["POST"])
 _v1("/ai/explain", ai_explain, ["POST"])

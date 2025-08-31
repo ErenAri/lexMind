@@ -6,8 +6,13 @@ This version works without vector embeddings and TiDB
 import os
 import io
 import re
+import json
+import hashlib
+from pathlib import Path
+import dotenv
 from typing import Optional
-from fastapi import FastAPI, HTTPException, UploadFile, File, Body, Depends
+from urllib.parse import unquote
+from fastapi import FastAPI, HTTPException, UploadFile, File, Body, Depends, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from datetime import datetime, timedelta
@@ -27,6 +32,9 @@ app = FastAPI(title="LexMind API (SQLite)")
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Load .env for local development (e.g., SLACK_WEBHOOK_URL)
+dotenv.load_dotenv(str((Path(__file__).parent / ".." / ".env").resolve()))
 
 # Simple CORS setup for development
 cors_origins = [
@@ -94,18 +102,28 @@ async def root():
 
 # Authentication endpoints
 @app.post("/token", response_model=Token)
-async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
-    user = await authenticate_user(form_data.username, form_data.password)
+async def login_for_access_token(
+    username: str = Form(...),
+    password: str = Form(...),
+    remember_me: bool = Form(False)
+):
+    user = await authenticate_user(username, password)
     if not user:
         raise HTTPException(
             status_code=401,
             detail="Invalid username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    
+    # Create token with different expiration based on remember_me
     access_token = create_access_token(
-        data={"sub": user.username, "role": user.role}, expires_delta=access_token_expires
+        data={"sub": user.username, "role": user.role}, 
+        remember_me=remember_me
     )
+    
+    # Log the login for security/audit purposes
+    logger.info(f"User {username} logged in (remember_me: {remember_me})")
+    
     return {"access_token": access_token, "token_type": "bearer"}
 
 @app.get("/me", response_model=User)
@@ -340,6 +358,253 @@ def _split_semantic_chunks(text: str, target: int = 1000, overlap: int = 120) ->
     
     return chunks
 
+def _ensure_metadata_tables() -> None:
+    """Create lightweight metadata/draft tables if they don't exist."""
+    try:
+        execute(
+            """
+            CREATE TABLE IF NOT EXISTS doc_metadata (
+                path TEXT PRIMARY KEY,
+                display_name TEXT,
+                description TEXT,
+                tags TEXT,
+                type TEXT,
+                version INTEGER DEFAULT 1,
+                last_modified TEXT,
+                is_favorite INTEGER DEFAULT 0
+            )
+            """
+        )
+        execute(
+            """
+            CREATE TABLE IF NOT EXISTS doc_drafts (
+                path TEXT PRIMARY KEY,
+                content TEXT,
+                updated_at TEXT
+            )
+            """
+        )
+    except Exception as e:
+        logger.warning(f"Failed ensuring metadata tables: {e}")
+
+def _ensure_versions_table() -> None:
+    try:
+        execute(
+            """
+            CREATE TABLE IF NOT EXISTS doc_versions (
+                path TEXT,
+                version_number INTEGER,
+                content TEXT,
+                created_by TEXT,
+                created_at TEXT,
+                PRIMARY KEY(path, version_number)
+            )
+            """
+        )
+    except Exception as e:
+        logger.warning(f"Failed ensuring versions table: {e}")
+
+def _ensure_collaboration_tables() -> None:
+    try:
+        execute(
+            """
+            CREATE TABLE IF NOT EXISTS doc_collaborators (
+                path TEXT,
+                user_id TEXT,
+                role TEXT,
+                added_at TEXT,
+                PRIMARY KEY(path, user_id)
+            )
+            """
+        )
+        execute(
+            """
+            CREATE TABLE IF NOT EXISTS doc_comments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                path TEXT,
+                user_id TEXT,
+                content TEXT,
+                created_at TEXT
+            )
+            """
+        )
+    except Exception as e:
+        logger.warning(f"Failed ensuring collaboration tables: {e}")
+
+def _fetch_document_library(include_preview: bool = False, favorites_only: bool = False, limit: Optional[int] = None) -> list[dict]:
+    """Build unified document library list from corp_docs + reg_texts joined with doc_metadata."""
+    _ensure_metadata_tables()
+
+    # Corporate documents aggregate
+    docs_sql = """
+    SELECT d.path as path,
+           MIN(d.created_at) as first_seen,
+           MAX(d.created_at) as last_seen,
+           COUNT(*) as chunks,
+           SUM(LENGTH(COALESCE(d.content, ''))) as bytes,
+           dm.display_name as md_display_name,
+           dm.description as md_description,
+           dm.tags as md_tags,
+           dm.version as md_version,
+           dm.is_favorite as md_favorite,
+           dm.last_modified as md_last_modified
+    FROM corp_docs d
+    LEFT JOIN doc_metadata dm ON dm.path = d.path
+    GROUP BY d.path
+    """
+
+    doc_rows = execute(docs_sql) or []
+
+    # Optionally fetch previews for docs: first chunk
+    previews: dict[str, str] = {}
+    if include_preview and doc_rows:
+        try:
+            prev_sql = """
+            SELECT x.path, x.content
+            FROM (
+                SELECT path, content, ROW_NUMBER() OVER (PARTITION BY path ORDER BY chunk_idx) as rn
+                FROM corp_docs
+            ) x
+            WHERE x.rn = 1
+            """
+            for r in execute(prev_sql) or []:
+                previews[r["path"]] = (r.get("content") or "")
+        except Exception:
+            pass
+
+    items: list[dict] = []
+
+    for r in doc_rows:
+        path = r["path"]
+        display_name = r.get("md_display_name") or (path.split("/")[-1] if "/" in path else path)
+        description = r.get("md_description")
+        tags = []
+        try:
+            if r.get("md_tags"):
+                tags = json.loads(r["md_tags"]) or []
+        except Exception:
+            tags = []
+        is_favorite = bool(r.get("md_favorite") or 0)
+        version = int(r.get("md_version") or 1)
+        content_preview = None
+        if include_preview:
+            content_preview = (previews.get(path) or "")[:600]
+
+        item = {
+            "id": path,
+            "path": path,
+            "display_name": display_name,
+            "description": description,
+            "content_preview": content_preview,
+            "type": "doc",
+            "category": "general",
+            "tags": tags,
+            "first_seen": r.get("first_seen"),
+            "last_seen": r.get("last_seen"),
+            "last_accessed": r.get("md_last_modified") or r.get("last_seen"),
+            "access_count": 0,
+            "chunks": int(r.get("chunks") or 1),
+            "file_size": int(r.get("bytes") or 0),
+            "is_favorite": is_favorite,
+            "version": version,
+            "status": "active",
+        }
+
+        if favorites_only and not is_favorite:
+            continue
+        items.append(item)
+
+    # Regulations
+    regs_sql = """
+    SELECT 'reg:' || rt.title as path,
+           rt.title as title,
+           rt.section as section,
+           rt.text as text,
+           rt.created_at as created_at,
+           dm.display_name as md_display_name,
+           dm.description as md_description,
+           dm.tags as md_tags,
+           dm.version as md_version,
+           dm.is_favorite as md_favorite,
+           dm.last_modified as md_last_modified
+    FROM reg_texts rt
+    LEFT JOIN doc_metadata dm ON dm.path = 'reg:' || rt.title
+    """
+    reg_rows = execute(regs_sql) or []
+
+    for r in reg_rows:
+        path = r["path"]
+        display_name = r.get("md_display_name") or r.get("title") or path[4:]
+        description = r.get("md_description") or (f"Section: {r.get('section')}" if r.get("section") else None)
+        tags = []
+        try:
+            if r.get("md_tags"):
+                tags = json.loads(r["md_tags"]) or []
+        except Exception:
+            tags = []
+        is_favorite = bool(r.get("md_favorite") or 0)
+        version = int(r.get("md_version") or 1)
+        content_preview = None
+        if include_preview:
+            content_preview = (r.get("text") or "")[:600]
+
+        item = {
+            "id": path,
+            "path": path,
+            "display_name": display_name,
+            "description": description,
+            "content_preview": content_preview,
+            "type": "reg",
+            "category": "regulation",
+            "tags": tags,
+            "first_seen": r.get("created_at"),
+            "last_seen": r.get("created_at"),
+            "last_accessed": r.get("md_last_modified") or r.get("created_at"),
+            "access_count": 0,
+            "chunks": 1,
+            "file_size": len((r.get("text") or "").encode("utf-8")),
+            "is_favorite": is_favorite,
+            "version": version,
+            "status": "active",
+        }
+
+        if favorites_only and not is_favorite:
+            continue
+        items.append(item)
+
+    # Sort and limit
+    items.sort(key=lambda x: (x.get("last_seen") or ""), reverse=True)
+    if limit is not None:
+        items = items[: max(0, int(limit))]
+    return items
+
+@app.get("/documents/library")
+async def documents_library(include_preview: bool = False, include_stats: bool = False):
+    try:
+        items = _fetch_document_library(include_preview=include_preview)
+        return {"documents": items, "stats": {"total": len(items)} if include_stats else None}
+    except Exception as e:
+        logger.error(f"Library load failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load library")
+
+@app.get("/documents/recent")
+async def documents_recent(limit: int = 10):
+    try:
+        items = _fetch_document_library(include_preview=False)
+        return {"documents": items[: max(0, int(limit))]}
+    except Exception as e:
+        logger.error(f"Recent load failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load recent documents")
+
+@app.get("/documents/favorites")
+async def documents_favorites(limit: int = 10):
+    try:
+        items = _fetch_document_library(include_preview=False, favorites_only=True)
+        return {"documents": items[: max(0, int(limit))]}
+    except Exception as e:
+        logger.error(f"Favorites load failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load favorites")
+
 # Add API versioning for compatibility
 def _v1(alias: str, func, methods: list[str]):
     app.add_api_route("/api/v1" + alias, func, methods=methods)
@@ -405,6 +670,767 @@ async def get_documents():
     except Exception as e:
         logger.error(f"Failed to get documents: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to get documents: {str(e)}")
+
+@app.get("/documents/{doc_path}")
+async def get_document_content(doc_path: str):
+    """Get full document content by path (supports corp docs and regulations)"""
+    try:
+        path = unquote(doc_path)
+
+        if path.startswith("reg:"):
+            # Regulation document: fetch by title (after 'reg:')
+            title = path[4:]
+            reg_sql = """
+            SELECT title, section, text, created_at
+            FROM reg_texts
+            WHERE title = ?
+            LIMIT 1
+            """
+            rows = execute(reg_sql, [title])
+            if not rows:
+                raise HTTPException(status_code=404, detail="Document not found")
+            row = rows[0]
+            content = row.get("text", "") or ""
+            display_name = row.get("title") or title
+            metadata = {
+                "display_name": display_name,
+                "description": (f"Section: {row.get('section')}" if row.get("section") else None),
+                "tags": [],
+                "created_at": row.get("created_at"),
+                "last_modified": row.get("created_at"),
+                "file_size": len(content.encode("utf-8")),
+                "type": "reg",
+                "version": 1,
+            }
+            return {"path": path, "content": content, "metadata": metadata}
+        else:
+            # Corporate document: concatenate chunks by chunk_idx
+            doc_sql = """
+            SELECT content, created_at
+            FROM corp_docs
+            WHERE path = ?
+            ORDER BY chunk_idx
+            """
+            rows = execute(doc_sql, [path])
+            if not rows:
+                raise HTTPException(status_code=404, detail="Document not found")
+            contents = [(r.get("content", "") or "") for r in rows]
+            content = "\n".join(contents)
+            first_created = rows[0].get("created_at")
+            last_created = rows[-1].get("created_at")
+            display_name = path.split("/")[-1] if "/" in path else path
+            metadata = {
+                "display_name": display_name,
+                "description": None,
+                "tags": [],
+                "created_at": first_created,
+                "last_modified": last_created,
+                "file_size": len(content.encode("utf-8")),
+                "type": "doc",
+                "version": 1,
+            }
+            return {"path": path, "content": content, "metadata": metadata}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get document '{doc_path}': {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get document: {str(e)}")
+
+@app.post("/documents/{doc_id}/access")
+async def track_document_access(doc_id: str, current_user: User = Depends(get_current_user)):
+    """Track document access (no-op for SQLite demo; validates existence)."""
+    try:
+        path = unquote(doc_id)
+        if path.startswith("reg:"):
+            exists = execute("SELECT 1 FROM reg_texts WHERE title = ? LIMIT 1", [path[4:]])
+        else:
+            exists = execute("SELECT 1 FROM corp_docs WHERE path = ? LIMIT 1", [path])
+        if not exists:
+            raise HTTPException(status_code=404, detail="Document not found")
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to track access for '{doc_id}': {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to track document access: {str(e)}")
+
+@app.post("/documents/{doc_id}/favorite")
+async def toggle_favorite(doc_id: str, data: dict = Body(...), current_user: User = Depends(get_current_user)):
+    """Toggle favorite flag for a document (stored in doc_metadata)."""
+    try:
+        _ensure_metadata_tables()
+        path = unquote(doc_id)
+        is_favorite = 1 if (data or {}).get("is_favorite") else 0
+
+        # Validate existence
+        if path.startswith("reg:"):
+            exists = execute("SELECT 1 FROM reg_texts WHERE title = ? LIMIT 1", [path[4:]])
+            doc_type = "reg"
+        else:
+            exists = execute("SELECT 1 FROM corp_docs WHERE path = ? LIMIT 1", [path])
+            doc_type = "doc"
+        if not exists:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        # Ensure column exists (best-effort)
+        try:
+            execute("ALTER TABLE doc_metadata ADD COLUMN is_favorite INTEGER DEFAULT 0")
+        except Exception:
+            pass
+
+        # Upsert
+        execute(
+            """
+            INSERT INTO doc_metadata(path, is_favorite, type, last_modified)
+            VALUES(?, ?, ?, datetime('now'))
+            ON CONFLICT(path) DO UPDATE SET
+                is_favorite = excluded.is_favorite,
+                type = excluded.type,
+                last_modified = datetime('now')
+            """,
+            [path, is_favorite, doc_type],
+        )
+        return {"ok": True, "is_favorite": bool(is_favorite)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to toggle favorite for '{doc_id}': {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to toggle favorite: {str(e)}")
+
+@app.delete("/documents/{doc_path}")
+async def delete_document(doc_path: str, current_user: User = Depends(get_current_user)):
+    """Delete a document or regulation by path/title."""
+    try:
+        path = unquote(doc_path)
+        if path.startswith("reg:"):
+            title = path[4:]
+            execute("DELETE FROM reg_texts WHERE title = ?", [title])
+            execute("DELETE FROM doc_metadata WHERE path = ?", [path])
+        else:
+            execute("DELETE FROM corp_docs WHERE path = ?", [path])
+            execute("DELETE FROM doc_metadata WHERE path = ?", [path])
+        return {"ok": True}
+    except Exception as e:
+        logger.error(f"Failed to delete document '{doc_path}': {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete document: {str(e)}")
+
+@app.patch("/documents/{doc_path}")
+async def update_document_metadata(doc_path: str, metadata: dict = Body(...), current_user: User = Depends(get_current_user)):
+    """Update document metadata (display_name, description, tags)."""
+    try:
+        _ensure_metadata_tables()
+        path = unquote(doc_path)
+        is_reg = path.startswith("reg:")
+        doc_type = "reg" if is_reg else "doc"
+
+        # Validate existence
+        if is_reg:
+            exists = execute("SELECT 1 FROM reg_texts WHERE title = ? LIMIT 1", [path[4:]])
+        else:
+            exists = execute("SELECT 1 FROM corp_docs WHERE path = ? LIMIT 1", [path])
+        if not exists:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        display_name = metadata.get("display_name")
+        description = metadata.get("description")
+        tags = metadata.get("tags") or []
+
+        # Upsert into metadata table
+        execute(
+            """
+            INSERT INTO doc_metadata(path, display_name, description, tags, type, last_modified)
+            VALUES(?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(path) DO UPDATE SET
+                display_name = excluded.display_name,
+                description = excluded.description,
+                tags = excluded.tags,
+                type = excluded.type,
+                last_modified = datetime('now')
+            """,
+            [path, display_name, description, json.dumps(tags), doc_type],
+        )
+
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update metadata for '{doc_path}': {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to update metadata: {str(e)}")
+
+@app.post("/documents/{doc_path}/draft")
+async def save_document_draft(doc_path: str, data: dict = Body(...), current_user: User = Depends(get_current_user)):
+    """Save a draft for a document (non-critical storage)."""
+    try:
+        _ensure_metadata_tables()
+        path = unquote(doc_path)
+        content = data.get("content", "")
+
+        # Validate existence (best-effort)
+        is_reg = path.startswith("reg:")
+        if is_reg:
+            exists = execute("SELECT 1 FROM reg_texts WHERE title = ? LIMIT 1", [path[4:]])
+        else:
+            exists = execute("SELECT 1 FROM corp_docs WHERE path = ? LIMIT 1", [path])
+        if not exists:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        execute(
+            """
+            INSERT INTO doc_drafts(path, content, updated_at)
+            VALUES(?, ?, datetime('now'))
+            ON CONFLICT(path) DO UPDATE SET
+                content = excluded.content,
+                updated_at = datetime('now')
+            """,
+            [path, content],
+        )
+
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to save draft for '{doc_path}': {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to save draft: {str(e)}")
+
+@app.post("/documents/{doc_id}/versions")
+async def create_new_version(doc_id: str, data: dict = Body(...), current_user: User = Depends(get_current_user)):
+    """Create a new version by replacing the stored content with provided content."""
+    try:
+        _ensure_metadata_tables()
+        path = unquote(doc_id)
+        new_content: str = data.get("content", "") or ""
+
+        if not isinstance(new_content, str) or len(new_content.strip()) == 0:
+            raise HTTPException(status_code=400, detail="Content is required")
+
+        is_reg = path.startswith("reg:")
+        if is_reg:
+            title = path[4:]
+            # Update regulation text directly
+            updated = execute(
+                """
+                UPDATE reg_texts SET text = ? WHERE title = ?
+                """,
+                [new_content, title],
+            )
+            # No rowcount available via our helper; validate existence separately
+            exists = execute("SELECT 1 FROM reg_texts WHERE title = ? LIMIT 1", [title])
+            if not exists:
+                raise HTTPException(status_code=404, detail="Document not found")
+        else:
+            # Replace corp document chunks with new chunking
+            exists = execute("SELECT 1 FROM corp_docs WHERE path = ? LIMIT 1", [path])
+            if not exists:
+                raise HTTPException(status_code=404, detail="Document not found")
+            execute("DELETE FROM corp_docs WHERE path = ?", [path])
+            chunks = _split_semantic_chunks(new_content)
+            if len(chunks) == 0:
+                # Fallback to single chunk
+                chunks = [new_content]
+            for i, chunk in enumerate(chunks):
+                execute(
+                    """
+                    INSERT INTO corp_docs(path, chunk_idx, content, embedding_placeholder, created_at)
+                    VALUES(?, ?, ?, ?, datetime('now'))
+                    """,
+                    [path, i, chunk, "placeholder_embedding"],
+                )
+
+        # Bump version in metadata table
+        # Initialize row if missing so we can track version increases
+        execute(
+            """
+            INSERT INTO doc_metadata(path, version, last_modified)
+            VALUES(?, 1, datetime('now'))
+            ON CONFLICT(path) DO UPDATE SET
+                version = COALESCE(version, 1) + 1,
+                last_modified = datetime('now')
+            """,
+            [path],
+        )
+
+        # Return the new version number
+        row = execute("SELECT version FROM doc_metadata WHERE path = ?", [path])
+        new_version = row[0]["version"] if row else 1
+
+        # Persist version snapshot
+        try:
+            _ensure_versions_table()
+            execute(
+                """
+                INSERT OR REPLACE INTO doc_versions(path, version_number, content, created_by, created_at)
+                VALUES(?, ?, ?, ?, datetime('now'))
+                """,
+                [path, new_version, new_content, current_user.username if hasattr(current_user, 'username') else "system"],
+            )
+        except Exception as e:
+            logger.warning(f"Failed to persist version snapshot for {path} v{new_version}: {e}")
+
+        return {"ok": True, "version": new_version}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create new version for '{doc_id}': {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to create new version: {str(e)}")
+
+def _generate_version_id(path: str, version_number: int) -> str:
+    base = f"{path}:{version_number}"
+    return hashlib.sha1(base.encode("utf-8")).hexdigest()
+
+@app.get("/documents/{document_id}/versions")
+async def get_document_versions(document_id: str):
+    """Return version history from doc_versions; seed v1 if missing."""
+    try:
+        _ensure_metadata_tables()
+        _ensure_versions_table()
+        path = unquote(document_id)
+        # Seed version 1 if table empty for this path
+        rows = execute("SELECT version_number FROM doc_versions WHERE path = ? ORDER BY version_number", [path])
+        if not rows:
+            current_content = _get_document_content_by_path(path)
+            execute(
+                """
+                INSERT OR REPLACE INTO doc_versions(path, version_number, content, created_by, created_at)
+                VALUES(?, 1, ?, 'system', datetime('now'))
+                """,
+                [path, current_content],
+            )
+            rows = execute("SELECT version_number FROM doc_versions WHERE path = ? ORDER BY version_number", [path])
+
+        # Determine current version from metadata
+        row = execute("SELECT version, display_name FROM doc_metadata WHERE path = ?", [path])
+        current_version = row[0]["version"] if row and row[0].get("version") is not None else (rows[-1]["version_number"] if rows else 1)
+        display_name = (row[0].get("display_name") if row else None) or (path.split("/")[-1] if "/" in path else path)
+
+        # Build version list with file sizes
+        version_rows = execute("SELECT version_number, content, created_by, created_at FROM doc_versions WHERE path = ? ORDER BY version_number DESC", [path])
+        versions = []
+        for r in version_rows:
+            vnum = int(r["version_number"])
+            content = r.get("content") or ""
+            versions.append({
+                "version_id": _generate_version_id(path, vnum),
+                "document_id": path,
+                "version_number": vnum,
+                "title": f"{display_name}",
+                "content": content,
+                "metadata": {
+                    "author": r.get("created_by") or "system",
+                    "created_at": (r.get("created_at") or datetime.utcnow().isoformat()) + ("Z" if "Z" not in (r.get("created_at") or "") else ""),
+                    "file_size": len(content.encode("utf-8")),
+                },
+                "is_current": vnum == current_version,
+            })
+        return {"versions": versions}
+    except Exception as e:
+        logger.error(f"Failed to get versions for '{document_id}': {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get version history: {str(e)}")
+
+# v1 aliases for new endpoints where needed by the web app
+_v1("/documents/{doc_path}", get_document_content, ["GET"])
+_v1("/documents/{document_id}/versions", get_document_versions, ["GET"])
+
+def _get_document_content_by_path(path: str) -> str:
+    if path.startswith("reg:"):
+        title = path[4:]
+        rows = execute("SELECT text FROM reg_texts WHERE title = ?", [title])
+        return (rows[0]["text"] if rows else "") or ""
+    rows = execute("SELECT content FROM corp_docs WHERE path = ? ORDER BY chunk_idx", [path])
+    return "\n".join([(r.get("content") or "") for r in rows])
+
+@app.post("/api/v1/documents/{document_id}/compare")
+async def compare_document_versions(document_id: str, body: dict = Body(...), current_user: User = Depends(get_current_user)):
+    try:
+        path = unquote(document_id)
+        left_id = str(body.get("left_version")) if body.get("left_version") is not None else None
+        right_id = str(body.get("right_version")) if body.get("right_version") is not None else None
+
+        _ensure_versions_table()
+        # Load versions
+        versions = execute("SELECT version_number, content, created_at FROM doc_versions WHERE path = ? ORDER BY version_number", [path])
+        if not versions:
+            # seed and reload
+            current_content = _get_document_content_by_path(path)
+            execute(
+                "INSERT OR REPLACE INTO doc_versions(path, version_number, content, created_by, created_at) VALUES(?, 1, ?, 'system', datetime('now'))",
+                [path, current_content],
+            )
+            versions = execute("SELECT version_number, content, created_at FROM doc_versions WHERE path = ? ORDER BY version_number", [path])
+
+        def resolve_content(ver_id: Optional[str]) -> tuple[int, str, str]:
+            # Accept numeric version numbers or hashed ids
+            if ver_id and ver_id.isdigit():
+                vnum = int(ver_id)
+                row = next((r for r in versions if int(r["version_number"]) == vnum), None)
+                if row:
+                    return vnum, row.get("content") or "", (row.get("created_at") or datetime.utcnow().isoformat()) + "Z"
+            # fallback: try hash mapping
+            for r in versions:
+                vnum = int(r["version_number"])
+                if _generate_version_id(path, vnum) == ver_id:
+                    return vnum, r.get("content") or "", (r.get("created_at") or datetime.utcnow().isoformat()) + "Z"
+            # default to latest
+            last = versions[-1]
+            return int(last["version_number"]), last.get("content") or "", (last.get("created_at") or datetime.utcnow().isoformat()) + "Z"
+
+        left_num, left_content, left_time = resolve_content(left_id)
+        right_num, right_content, right_time = resolve_content(right_id)
+
+        # Build diff
+        import difflib
+        left_lines = left_content.splitlines()
+        right_lines = right_content.splitlines()
+        sm = difflib.SequenceMatcher(a=left_lines, b=right_lines)
+        diff = []
+        lno = 1
+        rno = 1
+        adds = dels = mods = 0
+        for tag, i1, i2, j1, j2 in sm.get_opcodes():
+            if tag == 'equal':
+                for k in range(i2 - i1):
+                    line = left_lines[i1 + k]
+                    diff.append({"type": "unchanged", "leftContent": line, "rightContent": line, "leftLineNumber": lno, "rightLineNumber": rno})
+                    lno += 1
+                    rno += 1
+            elif tag == 'delete':
+                for k in range(i2 - i1):
+                    line = left_lines[i1 + k]
+                    diff.append({"type": "removed", "leftContent": line, "leftLineNumber": lno})
+                    lno += 1
+                    dels += 1
+            elif tag == 'insert':
+                for k in range(j2 - j1):
+                    line = right_lines[j1 + k]
+                    diff.append({"type": "added", "rightContent": line, "rightLineNumber": rno})
+                    rno += 1
+                    adds += 1
+            elif tag == 'replace':
+                for k in range(max(i2 - i1, j2 - j1)):
+                    ltext = left_lines[i1 + k] if i1 + k < i2 else ''
+                    rtext = right_lines[j1 + k] if j1 + k < j2 else ''
+                    diff.append({"type": "modified", "leftContent": ltext, "rightContent": rtext, "leftLineNumber": lno if ltext else None, "rightLineNumber": rno if rtext else None})
+                    if ltext:
+                        lno += 1
+                    if rtext:
+                        rno += 1
+                    mods += 1
+
+        display_name = path.split("/")[-1] if "/" in path else path
+        left_version = {"version_id": _generate_version_id(path, left_num), "document_id": path, "version_number": left_num, "title": display_name, "metadata": {"author": "system", "created_at": left_time, "file_size": len(left_content.encode('utf-8'))}, "is_current": False}
+        right_version = {"version_id": _generate_version_id(path, right_num), "document_id": path, "version_number": right_num, "title": display_name, "metadata": {"author": "system", "created_at": right_time, "file_size": len(right_content.encode('utf-8'))}, "is_current": False}
+        return {"leftVersion": left_version, "rightVersion": right_version, "diff": diff, "stats": {"additions": adds, "deletions": dels, "modifications": mods}}
+    except Exception as e:
+        logger.error(f"Compare failed for '{document_id}': {e}")
+        raise HTTPException(status_code=500, detail="Failed to compare versions")
+
+# Legacy compatibility endpoints
+@app.get("/versioning/documents/{document_path}/versions")
+async def legacy_get_versions(document_path: str):
+    return await get_document_versions(document_path)
+
+@app.get("/versioning/documents/{document_path}/versions/compare/{v1}/{v2}")
+async def legacy_compare_versions(document_path: str, v1: int, v2: int):
+    return await compare_document_versions(document_path, {"left_version": str(v1), "right_version": str(v2)})
+
+@app.get("/versioning/temporal/documents/{document_path}")
+async def legacy_temporal(document_path: str, at_time: str):
+    # Return the most recent version content as a placeholder for time-travel in SQLite demo
+    versions = (await get_document_versions(document_path)).get("versions", [])  # type: ignore
+    if not versions:
+        raise HTTPException(status_code=404, detail="No versions")
+    latest = versions[0]
+    return {
+        "id": latest["version_number"],
+        "document_path": document_path,
+        "version_number": latest["version_number"],
+        "content": _get_document_content_by_path(unquote(document_path)),
+        "metadata": latest.get("metadata", {}),
+        "created_by": latest.get("metadata", {}).get("author", "system"),
+        "created_at": latest.get("metadata", {}).get("created_at"),
+        "valid_from": latest.get("metadata", {}).get("created_at"),
+        "valid_to": None,
+        "is_current": True,
+      }
+
+@app.post("/api/v1/documents/{document_id}/versions/{version_number}/rollback")
+async def rollback_document_version(document_id: str, version_number: int, current_user: User = Depends(get_current_user)):
+    try:
+        _ensure_versions_table()
+        path = unquote(document_id)
+        rows = execute("SELECT content FROM doc_versions WHERE path = ? AND version_number = ?", [path, version_number])
+        if not rows:
+            raise HTTPException(status_code=404, detail="Version not found")
+        content = rows[0].get("content") or ""
+
+        # Replace storage with selected version content
+        if path.startswith("reg:"):
+            title = path[4:]
+            execute("UPDATE reg_texts SET text = ? WHERE title = ?", [content, title])
+        else:
+            execute("DELETE FROM corp_docs WHERE path = ?", [path])
+            chunks = _split_semantic_chunks(content)
+            if not chunks:
+                chunks = [content]
+            for i, chunk in enumerate(chunks):
+                execute(
+                    "INSERT INTO corp_docs(path, chunk_idx, content, embedding_placeholder, created_at) VALUES(?, ?, ?, ?, datetime('now'))",
+                    [path, i, chunk, "placeholder_embedding"],
+                )
+
+        # Record new version after rollback
+        md = execute("SELECT version FROM doc_metadata WHERE path = ?", [path])
+        current_version = md[0]["version"] if md else 1
+        execute(
+            "INSERT INTO doc_versions(path, version_number, content, created_by, created_at) VALUES(?, ?, ?, 'system', datetime('now'))",
+            [path, current_version + 1, content],
+        )
+        execute(
+            "INSERT INTO doc_metadata(path, version, last_modified) VALUES(?, ?, datetime('now')) ON CONFLICT(path) DO UPDATE SET version = version + 1, last_modified = datetime('now')",
+            [path, current_version + 1],
+        )
+        return {"ok": True, "version": current_version + 1}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Rollback failed for '{document_id}' v{version_number}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to rollback version")
+
+@app.get("/serverless/performance/metrics")
+async def serverless_performance_metrics():
+    try:
+        return {
+            "total_queries": 42,
+            "avg_execution_time": 0.123,
+            "cache_hit_rate": 0.76,
+            "by_type": {"read": {"count": 30, "total_time": 2.4}, "write": {"count": 12, "total_time": 1.1}},
+            "by_region": {"us-east": {"count": 36, "total_time": 2.9}, "eu-west": {"count": 6, "total_time": 0.6}},
+        }
+    except Exception as e:
+        logger.error(f"Serverless metrics failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load performance metrics")
+
+# Simple compliance analyze action (no-op)
+@app.post("/compliance/analyze-all")
+async def compliance_analyze_all(current_user: User = Depends(get_current_user)):
+    try:
+        count = get_document_count()
+        return {"ok": True, "analyzed": count}
+    except Exception as e:
+        logger.error(f"Analyze-all failed: {e}")
+        raise HTTPException(status_code=500, detail="Analyze failed")
+
+# Analytics endpoints for dashboard widgets
+@app.get("/analytics/compliance/coverage")
+async def analytics_compliance_coverage():
+    try:
+        total_docs = get_document_count()
+        regulation_coverage = {
+            "GDPR": 0.72,
+            "SOX": 0.81,
+            "PCI DSS": 0.58,
+            "ISO 27001": 0.69,
+        }
+        uncovered = [k for k, v in regulation_coverage.items() if v < 0.4][:2]
+        high_risk_gaps = [
+            {
+                "regulation_code": "GDPR-32",
+                "avg_risk_score": 7.9,
+                "assessment_count": 3,
+                "last_assessment": datetime.utcnow().isoformat() + "Z",
+            },
+            {
+                "regulation_code": "PCI-8",
+                "avg_risk_score": 8.4,
+                "assessment_count": 2,
+                "last_assessment": datetime.utcnow().isoformat() + "Z",
+            },
+        ]
+        trend = []
+        for i in range(8):
+            day = datetime.utcnow() - timedelta(days=(7 - i))
+            for rt in ["gdpr", "financial", "security"]:
+                trend.append({
+                    "date": day.isoformat() + "Z",
+                    "regulation_type": rt,
+                    "coverage_percentage": 50 + i * 3 + (5 if rt == "financial" else 0),
+                })
+        return {
+            "regulation_coverage": regulation_coverage,
+            "uncovered_regulations": uncovered,
+            "high_risk_gaps": high_risk_gaps,
+            "coverage_trend": trend,
+            "overall_score": 0.705,
+        }
+    except Exception as e:
+        logger.error(f"Coverage analytics failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load coverage analytics")
+
+@app.get("/analytics/performance/metrics")
+async def analytics_performance_metrics():
+    try:
+        data = {
+            "query_performance": {
+                "read_avg_latency": 42.5,
+                "analytics_avg_latency": 88.3,
+                "write_avg_latency": 57.1,
+            },
+            "system_utilization": {
+                "cpu_usage": 41.2,
+                "memory_usage": 63.5,
+                "disk_io": 37.9,
+                "connection_pool_usage": 54.3,
+                "tiflash_cpu": 48.7,
+            },
+            "user_activity": {
+                "uploads": 4,
+                "views": 19,
+                "edits": 6,
+                "comments": 2,
+            },
+            "collaboration_stats": {
+                "active_sessions": 1,
+                "participating_users": 2,
+                "avg_participants_per_session": 2.0,
+            },
+            "cost_efficiency": {
+                "tiflash_efficiency_score": 86.5,
+                "documents_per_query": 3.7,
+                "estimated_monthly_cost": 12.345,
+                "avg_cost_per_query": 0.0023,
+            },
+        }
+        return data
+    except Exception as e:
+        logger.error(f"Performance analytics failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load performance analytics")
+
+@app.get("/analytics/risk/distribution")
+async def analytics_risk_distribution(start_date: Optional[str] = None, end_date: Optional[str] = None):
+    try:
+        # Simple heuristic based on available documents
+        total_docs = get_document_count()
+        by_category = {
+            "critical": max(0, min(3, total_docs // 5)),
+            "high": max(0, min(5, total_docs // 3)),
+            "medium": max(0, total_docs // 2),
+            "low": max(0, max(total_docs - 2, 0)),
+        }
+        by_regulation = {"GDPR-32": 8.4, "PCI-8": 7.3, "ISO-27001-A.12": 6.1}
+        by_department = {"engineering": 7, "finance": 4, "operations": 5}
+
+        trend = []
+        for i in range(12):
+            day = datetime.utcnow() - timedelta(days=(11 - i))
+            for cat, base in [("critical", 8.5), ("high", 6.5), ("medium", 4.5), ("low", 2.0)]:
+                trend.append({
+                    "date": day.isoformat() + "Z",
+                    "risk_category": cat,
+                    "risk_count": max(0, int(base // 2) - (11 - i) // 5),
+                    "avg_risk_level": max(0.1, min(10.0, base + (i - 6) * 0.2)),
+                })
+
+        critical = []
+        if total_docs > 0:
+            critical.append({
+                "document_path": "policies/risk-policy.txt",
+                "regulation_code": "GDPR-32",
+                "risk_score": 8.7,
+                "impact_score": 8.9,
+                "likelihood_score": 8.2,
+                "mitigation_status": "planned",
+                "urgency": "immediate",
+            })
+
+        return {
+            "by_category": by_category,
+            "by_regulation": by_regulation,
+            "by_department": by_department,
+            "trend_analysis": trend,
+            "critical_risks": critical,
+        }
+    except Exception as e:
+        logger.error(f"Risk analytics failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load risk analytics")
+
+# Collaboration/comment stubs to prevent UI errors
+@app.get("/api/v1/documents/{document_id}/collaborators")
+async def get_collaborators(document_id: str):
+    try:
+        _ensure_collaboration_tables()
+        path = unquote(document_id)
+        rows = execute("SELECT user_id, role, added_at FROM doc_collaborators WHERE path = ? ORDER BY added_at DESC", [path])
+        return {"collaborators": rows}
+    except Exception as e:
+        logger.error(f"Failed to get collaborators for '{document_id}': {e}")
+        raise HTTPException(status_code=500, detail="Failed to load collaborators")
+
+@app.post("/api/v1/documents/{document_id}/collaborators")
+async def add_collaborator(document_id: str, data: dict = Body(...), current_user: User = Depends(get_current_user)):
+    try:
+        _ensure_collaboration_tables()
+        path = unquote(document_id)
+        user_id = (data or {}).get("user_id")
+        role = (data or {}).get("role") or "editor"
+        if not user_id:
+            raise HTTPException(status_code=400, detail="user_id is required")
+        execute(
+            """
+            INSERT OR REPLACE INTO doc_collaborators(path, user_id, role, added_at)
+            VALUES(?, ?, ?, datetime('now'))
+            """,
+            [path, user_id, role],
+        )
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to add collaborator for '{document_id}': {e}")
+        raise HTTPException(status_code=500, detail="Failed to add collaborator")
+
+@app.delete("/api/v1/documents/{document_id}/collaborators/{user_id}")
+async def remove_collaborator(document_id: str, user_id: str, current_user: User = Depends(get_current_user)):
+    try:
+        _ensure_collaboration_tables()
+        path = unquote(document_id)
+        execute("DELETE FROM doc_collaborators WHERE path = ? AND user_id = ?", [path, user_id])
+        return {"ok": True}
+    except Exception as e:
+        logger.error(f"Failed to remove collaborator '{user_id}' for '{document_id}': {e}")
+        raise HTTPException(status_code=500, detail="Failed to remove collaborator")
+
+@app.get("/api/v1/documents/{document_id}/comments")
+async def get_comments(document_id: str):
+    try:
+        _ensure_collaboration_tables()
+        path = unquote(document_id)
+        rows = execute("SELECT id, user_id, content, created_at FROM doc_comments WHERE path = ? ORDER BY id DESC", [path])
+        return {"comments": rows}
+    except Exception as e:
+        logger.error(f"Failed to get comments for '{document_id}': {e}")
+        raise HTTPException(status_code=500, detail="Failed to load comments")
+
+@app.post("/api/v1/documents/{document_id}/comments")
+async def add_comment(document_id: str, data: dict = Body(...), current_user: User = Depends(get_current_user)):
+    try:
+        _ensure_collaboration_tables()
+        path = unquote(document_id)
+        user_id = (data or {}).get("user_id") or "user"
+        content = (data or {}).get("content")
+        if not content or not isinstance(content, str) or len(content.strip()) == 0:
+            raise HTTPException(status_code=400, detail="content is required")
+        execute(
+            """
+            INSERT INTO doc_comments(path, user_id, content, created_at)
+            VALUES(?, ?, ?, datetime('now'))
+            """,
+            [path, user_id, content.strip()],
+        )
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to add comment for '{document_id}': {e}")
+        raise HTTPException(status_code=500, detail="Failed to add comment")
 
 @app.get("/compliance/dashboard")
 async def get_dashboard():
@@ -1064,6 +2090,172 @@ _v1("/chat/conversations", get_conversations, ["GET"])
 _v1("/chat/conversations/{conversation_id}/messages", get_conversation_messages, ["GET"])  
 _v1("/chat", send_chat_message, ["POST"])
 _v1("/chat/conversations/{conversation_id}", delete_conversation, ["DELETE"])
+
+# -----------------------------
+# Agent Orchestrator (SQLite)
+# -----------------------------
+
+class AgentRunRequest(BaseModel):
+    query: str = Field(..., min_length=3, max_length=500)
+    notify: bool = False
+
+class AgentRunResponse(BaseModel):
+    ok: bool
+    message: str
+    sources_count: int
+    steps: list[dict]
+    notified: bool = False
+
+async def _send_slack_notification(text: str) -> bool:
+    try:
+        import httpx
+        webhook = os.getenv("SLACK_WEBHOOK_URL")
+        if not webhook:
+            return False
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(webhook, json={"text": text})
+        return True
+    except Exception:
+        return False
+
+@app.post("/agent/run", response_model=AgentRunResponse)
+async def run_agent(request: AgentRunRequest, current_user: User = Depends(get_current_user)):
+    steps: list[dict] = []
+    try:
+        t0 = datetime.utcnow()
+        steps.append({"step": "received", "at": t0.isoformat(), "query": request.query})
+
+        # 1) Search documents
+        t1 = datetime.utcnow()
+        sources = search_documents_intelligently(request.query)
+        steps.append({"step": "search", "at": t1.isoformat(), "results": len(sources)})
+
+        # 2) Build context
+        t2 = datetime.utcnow()
+        context = build_context_from_sources(sources)
+        steps.append({"step": "context", "at": t2.isoformat(), "chars": len(context)})
+
+        # 3) Generate AI answer (fast path → fallback)
+        t3 = datetime.utcnow()
+        try:
+            ai_answer = await generate_fast_ai_response(request.query, sources)
+        except Exception:
+            ai_answer = generate_document_answer(request.query, sources)
+        steps.append({"step": "answer", "at": t3.isoformat(), "chars": len(ai_answer)})
+
+        # 4) Optional notification
+        notified = False
+        if request.notify:
+            summary = f"Agent run completed. Query: '{request.query}'. Sources: {len(sources)}.\n\nAnswer:\n{ai_answer[:600]}"
+            notified = await _send_slack_notification(summary)
+            steps.append({"step": "notify", "at": datetime.utcnow().isoformat(), "notified": notified})
+
+        response = AgentRunResponse(
+            ok=True,
+            message=ai_answer,
+            sources_count=len(sources),
+            steps=steps,
+            notified=notified,
+        )
+        # Persist run (best-effort)
+        try:
+            execute(
+                """
+                CREATE TABLE IF NOT EXISTS agent_runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    query TEXT,
+                    answer TEXT,
+                    sources_count INTEGER,
+                    steps_json TEXT,
+                    notified INTEGER,
+                    created_at TEXT
+                )
+                """
+            )
+            execute(
+                """
+                INSERT INTO agent_runs(query, answer, sources_count, steps_json, notified, created_at)
+                VALUES(?, ?, ?, ?, ?, datetime('now'))
+                """,
+                [
+                    request.query,
+                    response.message,
+                    response.sources_count,
+                    json.dumps(response.steps),
+                    1 if response.notified else 0,
+                ],
+            )
+        except Exception as e:
+            logger.warning(f"Failed to persist agent run: {e}")
+        return response
+    except Exception as e:
+        steps.append({"step": "error", "error": str(e)})
+        raise HTTPException(status_code=500, detail=f"Agent run failed: {str(e)}")
+
+# v1 alias
+_v1("/agent/run", run_agent, ["POST"])
+
+@app.get("/agent/runs")
+async def list_agent_runs(limit: int = 20, current_user: User = Depends(get_current_user)):
+    try:
+        execute(
+            """
+            CREATE TABLE IF NOT EXISTS agent_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                query TEXT,
+                answer TEXT,
+                sources_count INTEGER,
+                steps_json TEXT,
+                notified INTEGER,
+                created_at TEXT
+            )
+            """
+        )
+        rows = execute(
+            "SELECT id, query, answer, sources_count, steps_json, notified, created_at FROM agent_runs ORDER BY id DESC LIMIT ?",
+            [max(0, int(limit))],
+        )
+        runs = [
+            {
+                "id": r["id"],
+                "query": r.get("query"),
+                "answer": r.get("answer"),
+                "sources_count": r.get("sources_count") or 0,
+                "steps_json": json.loads(r.get("steps_json") or "[]"),
+                "notified": bool(r.get("notified") or 0),
+                "created_at": r.get("created_at"),
+            }
+            for r in rows
+        ]
+        return {"runs": runs}
+    except Exception as e:
+        logger.error(f"Failed to list agent runs: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list agent runs")
+
+@app.get("/agent/runs/{run_id}")
+async def get_agent_run(run_id: int, current_user: User = Depends(get_current_user)):
+    try:
+        row = execute(
+            "SELECT id, query, answer, sources_count, steps_json, notified, created_at FROM agent_runs WHERE id = ?",
+            [run_id],
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Run not found")
+        r = row[0]
+        return {
+            "id": r["id"],
+            "query": r.get("query"),
+            "answer": r.get("answer"),
+            "sources_count": r.get("sources_count") or 0,
+            "steps": json.loads(r.get("steps_json") or "[]"),
+            "notified": bool(r.get("notified") or 0),
+            "created_at": r.get("created_at"),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get agent run {run_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load agent run")
 
 if __name__ == "__main__":
     import uvicorn

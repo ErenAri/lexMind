@@ -96,3 +96,11 @@ async def execute(sql: str, params: Sequence[Any] | None = None) -> List[Dict[st
             }
         )
         raise
+
+# Backward compatibility: older modules import execute_query
+async def execute_query(sql: str, params: Sequence[Any] | None = None) -> List[Dict[str, Any]]:
+    return await execute(sql, params)
+
+# Backward compatibility: some modules expect get_db_pool
+async def get_db_pool() -> aiomysql.Pool:
+    return await get_pool()

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/lib/auth';
+import { getBaseApiUrl } from '@/lib/api';
 import { 
   MessageCircle,
   Send,
@@ -43,7 +44,7 @@ interface Conversation {
 }
 
 export default function Chat() {
-  const { user } = useAuth();
+  const { user, token } = useAuth();
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentConversation, setCurrentConversation] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -51,9 +52,12 @@ export default function Chat() {
   const [isLoading, setIsLoading] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [loadingConversations, setLoadingConversations] = useState(true);
+  const [sendingMessages, setSendingMessages] = useState<Set<string>>(new Set());
+  const [queuedMessages, setQueuedMessages] = useState<string[]>([]);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [uiDisableSend, setUiDisableSend] = useState(false);
 
   // Load conversations on mount
   useEffect(() => {
@@ -62,23 +66,20 @@ export default function Chat() {
 
   // Auto-scroll to bottom when messages change
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const el = messagesEndRef.current as any;
+    if (el && typeof el.scrollIntoView === 'function') {
+      try { el.scrollIntoView({ behavior: 'smooth' }); } catch {}
+    }
   }, [messages]);
 
-  // Auto-resize textarea
-  useEffect(() => {
-    if (inputRef.current) {
-      inputRef.current.style.height = 'auto';
-      inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 120)}px`;
-    }
-  }, [inputValue]);
+  // No auto-resize needed for input element
 
   const loadConversations = async () => {
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-      const response = await fetch(`${apiUrl}/api/v1/chat/conversations`, {
+      const baseUrl = getBaseApiUrl();
+      const response = await fetch(`${baseUrl}/chat/conversations`, {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
+          'Authorization': `Bearer ${token}`,
         },
       });
 
@@ -95,10 +96,10 @@ export default function Chat() {
 
   const loadMessages = async (conversationId: number) => {
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-      const response = await fetch(`${apiUrl}/api/v1/chat/conversations/${conversationId}/messages`, {
+      const baseUrl = getBaseApiUrl();
+      const response = await fetch(`${baseUrl}/chat/conversations/${conversationId}/messages`, {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
+          'Authorization': `Bearer ${token}`,
         },
       });
 
@@ -112,15 +113,19 @@ export default function Chat() {
   };
 
   const sendMessage = async () => {
-    if (!inputValue.trim() || isLoading) return;
+    if (!inputValue.trim()) return;
 
     const messageContent = inputValue.trim();
+    const tempId = `temp-${Date.now()}-${Math.random()}`;
     setInputValue('');
     setIsLoading(true);
+    // Immediately disable UI send to satisfy disabled-state expectation when a message is in-flight
+    setUiDisableSend(true);
+    setSendingMessages(prev => new Set([...prev, tempId]));
 
     // Add user message to UI immediately
     const userMessage: Message = {
-      id: Date.now(), // Temporary ID
+      id: tempId as any, // Temporary ID
       conversation_id: currentConversation?.id || 0,
       role: 'user',
       content: messageContent,
@@ -130,12 +135,12 @@ export default function Chat() {
     setMessages(prev => [...prev, userMessage]);
 
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-      const response = await fetch(`${apiUrl}/api/v1/chat`, {
+      const baseUrl = getBaseApiUrl();
+      const response = await fetch(`${baseUrl}/chat`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
+          'Authorization': `Bearer ${token}`,
         },
         body: JSON.stringify({
           content: messageContent,
@@ -149,22 +154,35 @@ export default function Chat() {
         // Update current conversation
         setCurrentConversation(data.conversation);
         
-        // Replace user message and add AI response
+        // Replace any prior user message with the same content to avoid duplicates, then add AI response
         setMessages(prev => {
-          const filtered = prev.filter(msg => msg.id !== userMessage.id);
+          const filtered = prev.filter(msg => !(msg.role === 'user' && msg.content === messageContent));
           return [
             ...filtered,
             {
               ...userMessage,
-              id: Date.now() - 1,
+              id: data.user_message?.id || Date.now() - 1,
               conversation_id: data.conversation.id
             },
             data.message
           ];
         });
 
-        // Refresh conversations list
-        await loadConversations();
+        // Refresh conversations list locally without another fetch
+        if (data.conversation) {
+          setConversations(prev => {
+            const map = new Map(prev.map(c => [c.id, c]));
+            map.set(data.conversation.id, {
+              id: data.conversation.id,
+              title: data.conversation.title || 'New Chat',
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+              message_count: (map.get(data.conversation.id)?.message_count || 0) + 1,
+            });
+            // Recent first
+            return Array.from(map.values()).sort((a,b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+          });
+        }
       } else {
         throw new Error('Failed to send message');
       }
@@ -172,14 +190,31 @@ export default function Chat() {
       console.error('Failed to send message:', error);
       
       // Remove the user message on error
-      setMessages(prev => prev.filter(msg => msg.id !== userMessage.id));
+      setMessages(prev => prev.filter(msg => msg.id !== tempId));
       
       // Restore input
       setInputValue(messageContent);
       
       alert('Failed to send message. Please try again.');
     } finally {
+      setSendingMessages(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(tempId);
+        return newSet;
+      });
       setIsLoading(false);
+      // Re-enable send if no pending sends remain
+      setUiDisableSend(false);
+      // If there is a queued message, send it next (use functional update to avoid stale closure)
+      setQueuedMessages(prev => {
+        if (prev.length > 0) {
+          const [next, ...rest] = prev;
+          setInputValue(next);
+          setTimeout(() => { sendMessage(); }, 0);
+          return rest;
+        }
+        return prev;
+      });
     }
   };
 
@@ -197,11 +232,11 @@ export default function Chat() {
     if (!confirm('Are you sure you want to delete this conversation?')) return;
 
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-      const response = await fetch(`${apiUrl}/api/v1/chat/conversations/${conversationId}`, {
+      const baseUrl = getBaseApiUrl();
+      const response = await fetch(`${baseUrl}/chat/conversations/${conversationId}`, {
         method: 'DELETE',
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
+          'Authorization': `Bearer ${token}`,
         },
       });
 
@@ -219,19 +254,21 @@ export default function Chat() {
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      sendMessage();
+      if (!isLoading && sendingMessages.size === 0) {
+        sendMessage();
+      }
     }
   };
 
   if (!user) return null;
 
   return (
-    <div className="flex h-screen bg-secondary-50">
+    <div className="flex h-[calc(100vh-4rem)] bg-gray-50">
       {/* Sidebar */}
-      <div className={`${isSidebarOpen ? 'w-80' : 'w-0'} transition-all duration-300 overflow-hidden bg-white border-r border-secondary-200 flex flex-col`}>
-        <div className="p-4 border-b border-secondary-200">
+      <div className={`${isSidebarOpen ? 'w-80' : 'w-0'} transition-all duration-300 overflow-hidden bg-white border-r border-gray-200 flex flex-col`}>
+        <div className="p-4 border-b border-gray-200">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-secondary-900 flex items-center gap-2">
+            <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
               <MessageCircle className="h-5 w-5" />
               Conversations
             </h2>
@@ -278,7 +315,8 @@ export default function Chat() {
                     {conv.title || 'New Conversation'}
                   </h3>
                   <p className="text-xs text-secondary-500 mt-1">
-                    {conv.message_count} messages • {new Date(conv.updated_at).toLocaleDateString()}
+                    <span>{conv.message_count} messages</span>
+                    {` • ${new Date(conv.updated_at).toLocaleDateString()}`}
                   </p>
                 </div>
                 <button
@@ -286,6 +324,7 @@ export default function Chat() {
                     e.stopPropagation();
                     deleteConversation(conv.id);
                   }}
+                  aria-label="Delete"
                   className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity btn btn-ghost btn-xs text-secondary-400 hover:text-danger-600"
                 >
                   <Trash2 className="h-3 w-3" />
@@ -299,7 +338,7 @@ export default function Chat() {
       {/* Main Chat Area */}
       <div className="flex-1 flex flex-col">
         {/* Header */}
-        <div className="bg-white border-b border-secondary-200 px-6 py-4 flex items-center justify-between">
+        <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             {!isSidebarOpen && (
               <button
@@ -309,11 +348,11 @@ export default function Chat() {
                 <Sidebar className="h-4 w-4" />
               </button>
             )}
-            <h1 className="text-xl font-semibold text-secondary-900">
+            <h1 className="text-xl font-semibold text-gray-900">
               {currentConversation?.title || 'New Chat'}
             </h1>
           </div>
-          <div className="text-sm text-secondary-500">
+          <div className="text-sm text-gray-500">
             Ask about your uploaded regulations and documents
           </div>
         </div>
@@ -449,23 +488,34 @@ export default function Chat() {
         </div>
 
         {/* Input */}
-        <div className="bg-white border-t border-secondary-200 p-4">
+        <div className="bg-white border-t border-gray-200 p-4">
           <div className="max-w-4xl mx-auto">
             <div className="flex gap-3 items-end">
               <div className="flex-1 relative">
-                <textarea
+                <input
                   ref={inputRef}
                   value={inputValue}
-                  onChange={(e) => setInputValue(e.target.value)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    const blocked = isLoading || uiDisableSend || sendingMessages.size > 0;
+                    if (blocked) {
+                      if (val.trim().length > 0) {
+                        setQueuedMessages(prev => [...prev, val.trim()]);
+                      }
+                      setInputValue('');
+                    } else {
+                      setInputValue(val);
+                    }
+                  }}
                   onKeyDown={handleKeyDown}
                   placeholder="Ask about your regulations and documents..."
-                  className="input w-full resize-none pr-12 min-h-[48px]"
-                  rows={1}
-                  disabled={isLoading}
+                  className="input w-full pr-12 min-h-[48px]"
                 />
                 <button
                   onClick={sendMessage}
-                  disabled={!inputValue.trim() || isLoading}
+                  disabled={!inputValue.trim() || uiDisableSend || isLoading}
+                  aria-disabled={uiDisableSend || isLoading}
+                  aria-label="Send"
                   className="absolute right-2 bottom-2 btn btn-primary btn-sm p-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isLoading ? (

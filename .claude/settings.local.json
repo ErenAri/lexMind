@@ -20,7 +20,15 @@
       "Bash(cat:*)",
       "Bash(find:*)",
       "Bash(powershell:*)",
-      "Bash(taskkill:*)"
+      "Bash(taskkill:*)",
+      "Bash(dir \"C:\\projects\\lexmind\\apps\\api\" /s /b)",
+      "Bash(timeout:*)",
+      "Bash(pnpm type-check:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npm run typecheck:*)",
+      "Read(/C:\\c\\projects/**)",
+      "Bash(sqlite3:*)",
+      "Bash(grep:*)"
     ],
     "deny": [],
     "ask": [],

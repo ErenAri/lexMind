@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/auth';
+import { getBaseApiUrl } from '@/lib/api';
 import { 
   Shield,
   AlertTriangle,
@@ -57,7 +58,7 @@ interface DashboardData {
 }
 
 export default function ComplianceDashboard() {
-  const { user } = useAuth();
+  const { user, token } = useAuth();
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -68,10 +69,10 @@ export default function ComplianceDashboard() {
 
   const loadDashboardData = async () => {
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-      const response = await fetch(`${apiUrl}/api/v1/compliance/dashboard`, {
+      const baseUrl = getBaseApiUrl();
+      const response = await fetch(`${baseUrl}/compliance/dashboard`, {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
+          'Authorization': `Bearer ${token}`,
         },
       });
 
@@ -189,14 +190,30 @@ export default function ComplianceDashboard() {
           <h2 className="text-2xl font-bold text-secondary-900">Compliance Dashboard</h2>
           <p className="text-secondary-600">Real-time compliance analysis and risk assessment</p>
         </div>
-        <button
-          onClick={refreshDashboard}
-          disabled={refreshing}
-          className="btn btn-outline flex items-center gap-2"
-        >
-          <Activity className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
-          {refreshing ? 'Refreshing...' : 'Refresh'}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={async () => {
+              try {
+                const baseUrl = getBaseApiUrl();
+                await fetch(`${baseUrl}/compliance/analyze-all`, { method: 'POST' });
+                await refreshDashboard();
+              } catch (e) {
+                // ignore for UI
+              }
+            }}
+            className="btn btn-primary"
+          >
+            Analyze all
+          </button>
+          <button
+            onClick={refreshDashboard}
+            disabled={refreshing}
+            className="btn btn-outline flex items-center gap-2"
+          >
+            <Activity className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+            {refreshing ? 'Refreshing...' : 'Refresh'}
+          </button>
+        </div>
       </div>
 
       {/* Key Metrics */}

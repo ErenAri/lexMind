@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { 
   Home,
   Search,
@@ -11,6 +12,8 @@ import {
 } from 'lucide-react';
 
 export default function NotFound() {
+  const router = useRouter();
+  
   return (
     <div className="min-h-screen bg-gradient-to-br from-secondary-50 to-primary-50 flex items-center justify-center p-4">
       <div className="max-w-md w-full text-center">
@@ -106,7 +109,7 @@ export default function NotFound() {
         {/* Footer */}
         <div className="mt-8 text-center">
           <button
-            onClick={() => window.history.back()}
+            onClick={() => router.back()}
             className="text-sm text-secondary-600 hover:text-secondary-900 flex items-center justify-center gap-1 mx-auto"
           >
             <ArrowLeft className="h-4 w-4" />

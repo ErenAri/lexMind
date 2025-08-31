@@ -46,7 +46,7 @@ class VersionManager:
                                     uploaded_by: str,
                                     upload_type: UploadType = UploadType.UPDATE,
                                     upload_reason: str | None = None,
-                                    metadata: Dict[str, Any] = None) -> int:
+                                    metadata: Optional[Dict[str, Any]] = None) -> int:
         """Create a new version of a document"""
         
         # Calculate content hash
@@ -465,7 +465,7 @@ class VersionManager:
         
         # Get version content
         versions_query = """
-        SELECT version_number, content, created_at, uploaded_by
+        SELECT id, version_number, content, created_at, uploaded_by
         FROM document_versions 
         WHERE document_id = %s AND version_number IN (%s, %s)
         ORDER BY version_number
@@ -480,8 +480,8 @@ class VersionManager:
         
         # Get changes between versions
         changes = await self.get_version_changes(
-            versions_result[0]['id'] if 'id' in versions_result[0] else None,
-            versions_result[1]['id'] if 'id' in versions_result[1] else None
+            versions_result[0]['id'],
+            versions_result[1]['id']
         )
         
         # Calculate statistics
