@@ -1,7 +1,1 @@
-Implement golden-path workflow: trigger on upload, run hybrid search, persist, notify [IN_PROGRESS]
-Add UI action and status timeline for workflow ("Assess Compliance" button) [TODO]
-Show vector + FTS evidence (retrieved docs, highlights, timings) [TODO]
-Seed TiDB with minimal demo data and an apply script [TODO]
-Add LLM provider toggle (offline Mistral default; OpenAI optional) [TODO]
-Create Demo Mode env for judges; verify fresh-machine setup [TODO]
-Write 4-minute demo script and record walkthrough video [TODO]
+
